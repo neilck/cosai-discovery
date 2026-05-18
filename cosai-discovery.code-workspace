@@ -1,0 +1,38 @@
+{
+	"folders": [
+		{
+			"path": "."
+		},
+		{
+			"path": "../codeguard-cli"
+		},
+		{
+			"path": "../ws3-ai-risk-governance"
+		},
+		{
+			"path": "../cosai-whitepaper-converter"
+		},
+		{
+			"path": "../ws1-supply-chain"
+		},
+		{
+			"path": "../ws2-defenders"
+		},
+		{
+			"path": "../project-codeguard"
+		},
+		{
+			"path": "../ws4-secure-design-agentic-systems"
+		},
+		{
+			"path": "../oasis-open-project"
+		},
+		{
+			"path": "../cosai-tsc"
+		},
+		{
+			"path": "../secure-ai-tooling"
+		}
+	],
+	"settings": {}
+}

@@ -1,0 +1,40 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.egg-info/
+.eggs/
+build/
+dist/
+.installed.cfg
+
+# Virtual environments
+.venv/
+venv/
+env/
+ENV/
+
+# Tooling caches
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+.coverage.*
+coverage.xml
+htmlcov/
+
+# OS / editor
+.DS_Store
+.vscode/*
+!.vscode/settings.json.example
+.idea/
+
+# Indexer state
+.data/
+
+# Local sidecar indexes produced during indexer development
+.cosai-indexes/
+
+# Logs and scratch
+*.log
+.scratch/

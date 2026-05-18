@@ -1,0 +1,75 @@
+[project]
+name = "cdx-indexer"
+version = "0.1.0"
+description = "CLI indexer for the COSAI Discovery workspace"
+readme = "README.md"
+license = "Apache-2.0"
+requires-python = ">=3.12"
+authors = [
+    { name = "COSAI Discovery contributors" },
+]
+keywords = ["cosai", "discovery", "indexer", "mcp", "rag"]
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Intended Audience :: Developers",
+    "License :: OSI Approved :: Apache Software License",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.12",
+    "Topic :: Software Development :: Documentation",
+    "Topic :: Software Development :: Libraries",
+]
+
+# Phase 1 only needs click + pyyaml. The rest are listed for the later phases
+# (see _docs/indexer-build-plan.md). All small; resolves cleanly together.
+dependencies = [
+    "click>=8.1",
+    "pyyaml>=6.0",
+    "tomli>=2.0; python_version < '3.11'",   # pyproject parsing fallback
+]
+
+[project.optional-dependencies]
+# Phase 5: LLM-generated summaries.
+llm = [
+    "anthropic>=0.40",
+]
+# Phase 6: Embedding + vector store.
+embed = [
+    "voyageai>=0.3",
+    "sqlite-vec>=0.1",
+]
+# Development.
+dev = [
+    "pytest>=8.0",
+    "pytest-cov>=4.0",
+    "ruff>=0.1",
+]
+# Everything (convenience).
+all = [
+    "cdx-indexer[llm,embed,dev]",
+]
+
+[project.scripts]
+cdx-index = "cdx_indexer.cli:cli"
+
+[build-system]
+requires = ["setuptools>=61"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+minversion = "8.0"
+addopts = [
+    "-ra",
+    "--strict-markers",
+    "--strict-config",
+]
+
+[tool.ruff]
+target-version = "py312"
+line-length = 100
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "W", "B"]
