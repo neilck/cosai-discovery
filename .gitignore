@@ -35,6 +35,11 @@ htmlcov/
 # Local sidecar indexes produced during indexer development
 .cosai-indexes/
 
+# API keys and local config — never commit
+.env
+.env.local
+.env.*.local
+
 # Logs and scratch
 *.log
 .scratch/

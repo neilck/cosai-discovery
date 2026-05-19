@@ -37,7 +37,22 @@ Promoted to the schema. Recorded so the history of *why* and *based on what evid
 
 ### C8 — `builds_on` (manifest field, cross-project dependencies)
 
-**Status:** Adopted in v0.0.4 (Phase 8 — promoted from Deferred)
+**Status:** Adopted in v0.0.4 (Phase 8) → **Removed in implementation phase 1** (replaced by `related_urls`).
+
+**Note on removal:** The typed-enum design proved unreliable in practice. The first multi-project Stage 1 run produced `builds_on: []` on every project with Sonnet (and similarly thin output with Haiku), despite explicit prompt guidance with examples. The LLM consistently struggled to choose between `extends | implements | consumes | cites | donated_from | governed_by` for the same content, even when the relationship was obvious to a human reader.
+
+**Replacement:** `related_urls` — a free-string array of repository URLs found in the project's `README.md`. Same intent (cross-project discovery signal) but without the typed-relationship requirement that the LLM couldn't populate consistently. Anti-hallucination guard in `planner.py` drops any URL not present verbatim in the source README.
+
+**Lessons:**
+- Schema fields that require classification across a multi-valued enum are higher-risk than they look. The LLM might do it well for canonical examples and fail silently on edge cases.
+- "Strong prompt guidance with examples" doesn't reliably overcome this. The model knows what the answer should be but doesn't produce it.
+- A simpler shape (just URLs) preserves most of the value (workspace connection signals) at a fraction of the cognitive load.
+
+The original adoption rationale is preserved below for the historical record.
+
+---
+
+**Original promotion (Phase 8):**
 
 **Why adopted:** Three concrete cases across seven walks established the pattern as structurally real, not anecdotal. The user's decision to promote was guided by: (a) the field serves a clear AI-traversal use case ("what builds on X?", "how does Y use X?"); (b) the workspace's actual collaboration pattern — 3 of 11 projects explicitly building on others — makes the relationship queryable, even if no user has issued the query yet; (c) the shape designed for the field (typed enum + optional URI hint) carries enough nuance to serve "the how," not just "the that."
 
@@ -337,8 +352,8 @@ Enum on reference entries. Filter-only. Could have been derived from token count
 
 **Active deferred candidates: 0.**
 
-**Adopted (1):**
-- C8 `builds_on` — promoted in v0.0.4 (Phase 8). Manifest-level array with typed relationships and optional URI hints.
+**Adopted then removed (1):**
+- ~~C8 `builds_on`~~ — promoted in v0.0.4 (Phase 8); removed during implementation phase 1 after the typed-relationship enum proved unreliable to populate. Replaced by `related_urls` (free-string array of repo URLs from README).
 
 **Rejected (12):**
 - R1 `semantic_id`

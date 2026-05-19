@@ -78,7 +78,8 @@ Singleton, project-wide. Used by `list_projects` for discovery and by manifest-l
   "description": "<one-paragraph project description>",
 
   "languages": ["..."],
-  "primary_kind": "library | cli | service | claude-plugin | ruleset | docs | whitepaper | working-group | dataset | template",
+  "primary_kind": "library | cli | service | claude-plugin | ruleset | docs | whitepaper | working-group | dataset | template | other",
+  "primary_kind_other": "<free-text label, required when primary_kind == 'other'>",
   "also": ["..."],
 
   "license": "<SPDX expression, optional>",
@@ -89,9 +90,7 @@ Singleton, project-wide. Used by `list_projects` for discovery and by manifest-l
   "repo_url": "<url>",
   "default_branch": "main",
 
-  "builds_on": [
-    {"project": "<slug>", "relationship": "extends | implements | consumes | cites | donated_from | governed_by", "uri": "<optional>"}
-  ],
+  "related_urls": ["..."],
 
   "last_commit": { "sha": "...", "date": "<iso-8601>" },
   "last_indexed": "<iso-8601>",
@@ -110,6 +109,7 @@ Singleton, project-wide. Used by `list_projects` for discovery and by manifest-l
 | `description` | embed | One paragraph. Names what the project is and what it produces. |
 | `languages` | filter | **Derived union** of implementation languages from all entries. Used only by `list_projects` for coarse discovery. Empty array for docs-only projects. |
 | `primary_kind` | filter | Single value. The consumer-facing answer to "what did I get?" |
+| `primary_kind_other` | store | Required when `primary_kind == "other"`, forbidden otherwise. Free-text label. |
 | `also` | filter | Array of additional kinds the project ships. Matches as `primary_kind == X OR also contains X`. |
 | `license` | filter | Optional. Accepts SPDX expressions (e.g. `"CC-BY-4.0 AND Apache-2.0"`). Omit the field if absent — do not write `null`. |
 | `status` | filter | Declared by the project, default `active`. Not auto-derived. |
@@ -117,7 +117,7 @@ Singleton, project-wide. Used by `list_projects` for discovery and by manifest-l
 | `tags` | filter | Free-form. Lifted from project-level conventions and workspace-specific terminology. |
 | `repo_url` | store | Source repository URL. |
 | `default_branch` | store | Typically `main`. |
-| `builds_on` | store | Cross-project dependencies. See [`builds_on`](#builds_on). |
+| `related_urls` | store | Repository URLs referenced from this project's README. Free-form; no structural relationship implied. See [`related_urls`](#related_urls). |
 | `last_commit` | store | SHA + ISO-8601 date of most recent commit at index time. |
 | `last_indexed` | store | ISO-8601 timestamp when the index was last written. |
 | `counts` | store | Entry counts per corpus. Derived. |
@@ -136,46 +136,36 @@ Singleton, project-wide. Used by `list_projects` for discovery and by manifest-l
 | `working-group` | Meeting notes, charters, governance artifacts. |
 | `dataset` | Structured non-code data. |
 | `template` | Repo or content template for downstream use. |
+| `other` | Project genuinely doesn't fit any value above. Requires `primary_kind_other`. |
 
-### `builds_on`
+Prefer a defined value over `other` whenever one fits honestly. Use `other` as the escape hatch for genuine long-tail cases (e.g. a VS Code extension, a Terraform module, a non-software artifact); inventing a value via `other` is cheaper than expanding the enum each time a niche shape appears.
 
-Declares cross-project dependencies on other workspace projects. Each entry has three fields:
+### `primary_kind_other`
 
-| Field | Required | Notes |
-|---|---|---|
-| `project` | yes | Slug matching another project's `manifest.project`. |
-| `relationship` | yes | One of the enum values below. |
-| `uri` | no | Hint, not a guarantee. May be a repo URL, a deep-link into a specific upstream document or section, or an internal reference. The MCP server does not validate format. |
+Required when `primary_kind == "other"`, forbidden otherwise. A short free-text label naming the project's kind in the author's own words. Examples: `"vs-code-extension"`, `"terraform-module"`, `"jupyter-tutorial-collection"`.
 
-#### `relationship` enum
+The MCP server doesn't validate or enumerate these values; they're descriptive metadata for the model to read. Recurring values across multiple projects are evidence that a new enum value may be worth adopting in a future schema bump.
 
-| Value | Meaning | Example |
-|---|---|---|
-| `extends` | Direct continuation or derivative of the upstream. | A v2 of an existing framework. |
-| `implements` | Provides an implementation of the upstream's framework, controls, or specification. | A cookbook implementing controls from a risk-map. |
-| `consumes` | Uses the upstream as a runtime or build-time content input. | A CLI that consumes rule files from another repo. |
-| `cites` | References the upstream for context but isn't derivative. | A whitepaper citing another for background. |
-| `donated_from` | Founded on a donation or transfer from the upstream. | A SIG built around a donated codebase. |
-| `governed_by` | Operates under the upstream's governance, charter, or rules. | A workstream under an umbrella project. |
+### `related_urls`
 
-The relationship type should be the most specific honest characterisation. Prefer narrower types (`cites`) when uncertain over broader ones (`extends`).
+A free-form array of repository URLs referenced from this project's `README.md`. The intent is to preserve **structural connection signals** without claiming a relationship type:
 
-`builds_on` is for **content, code, framework, and governance dependencies**. It is not for build-tool relationships ("we use this converter to render our PDFs"). Build tools are infrastructure; if every project listed every tool it ran, the field would lose discriminating power.
+- A workstream README that links to its umbrella governance repo.
+- A CLI that links to the upstream whose rules it consumes.
+- A whitepaper that cites another paper's repo for context.
+- An external dependency mentioned in the README.
+
+The array is populated by the indexer from `README.md` content. Each entry is a full URL exactly as it appeared in the README (the indexer does not normalise paths). External repos are allowed; the field is not workspace-scoped.
+
+This field replaces an earlier `builds_on` field that attempted to encode a typed relationship enum. Across ten projects, the typed form proved unreliable to populate consistently. URLs in a README are a more honest signal: they're either present in the source or they aren't.
 
 #### Example
 
 ```json
-"builds_on": [
-  {
-    "project": "project-codeguard",
-    "relationship": "consumes",
-    "uri": "https://github.com/cosai-oasis/project-codeguard"
-  },
-  {
-    "project": "secure-ai-tooling",
-    "relationship": "implements",
-    "uri": "https://github.com/cosai-oasis/secure-ai-tooling/tree/main/risk-map"
-  }
+"related_urls": [
+  "https://github.com/cosai-oasis/project-codeguard",
+  "https://github.com/cosai-oasis/secure-ai-tooling/tree/main/risk-map",
+  "https://github.com/cosai-oasis/oasis-open-project"
 ]
 ```
 

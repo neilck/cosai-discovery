@@ -1,0 +1,90 @@
+<!--
+Stage 1 user prompt template.
+
+Loaded by src/cdx_indexer/planner.py. The placeholder {project_facts} is
+replaced with the JSON-serialised ProjectScan via .replace() (not .format()),
+so the prompt body can contain literal { and } characters freely.
+
+This prompt encodes the rules from:
+  - _docs/index-file-format-0.1.0.md (the spec)
+  - _docs/indexer-build-plan.md (the build plan + working principles)
+If those documents change, this prompt may need updating to match.
+-->
+
+You are classifying a project from the COSAI workspace. The project's deterministic facts (filesystem, manifests, README content, git metadata, workspace peers) are provided below.
+
+Produce a single JSON object with these top-level keys:
+
+## 1. manifest fields
+
+- **description**: ONE PARAGRAPH (1–3 sentences) describing what THIS project specifically does and produces. Do NOT use organizational boilerplate like "This repository is for the work of the Coalition for Secure AI..." — that text appears in many CoSAI READMEs and conveys nothing about what a specific project is. If the README leads with boilerplate, skip past it to the actual project description.
+
+- **primary_kind**: ONE of these exact values:
+  `library | cli | service | claude-plugin | ruleset | docs | whitepaper | working-group | dataset | template | other`
+
+  Pick the consumer-facing answer to "what did I get?" Distinguishing guidance:
+  - A CLI that uses bundled rules (e.g. codeguard-cli) is primarily a `cli`, not a `ruleset` — the rules are consumed inputs, not the product.
+  - A project that ships rules as its product (e.g. project-codeguard with 100+ rule files in `sources/rules/`) is a `ruleset`.
+  - A CoSAI workstream repository (one whose README explicitly says it IS a CoSAI workstream) is a `working-group` even if it also publishes whitepapers. The whitepapers go in `also`.
+  - The umbrella governance repository (oasis-open-project) is a `working-group`.
+  - Use `other` only when no listed value fits honestly. When you do, set `primary_kind_other` to a short kebab-case label (e.g. `"vs-code-extension"`, `"terraform-module"`).
+
+- **primary_kind_other**: REQUIRED when `primary_kind == "other"`; otherwise omit or set to null.
+
+- **also**: array of additional kinds the project ships. Same enum as `primary_kind`. Order-insensitive. Empty array if none.
+
+- **status**: ONE of: `active | archived | draft`
+  - `draft` when the project is in planning state (no published deliverables yet), or when the README explicitly disclaims production readiness ("99% AI-written and currently fails its own checks", etc.).
+  - `archived` only when the README explicitly says so.
+  - Default: `active`.
+
+- **owners**: array of strings extracted from sections in the README named things like "Workstream Leads", "TSC Co-Chairs", "Maintainers", etc. Each string is one person (with their affiliation if given). Empty array if no such section exists.
+
+- **tags**: 3–8 short kebab-case keywords specific to this project's content. Include the workspace marker `"cosai"` if appropriate. Avoid generic tags like `"software"` or `"code"`. Prefer specifics like `"supply-chain"`, `"telemetry"`, `"ml-signing"`, `"agentic"`, `"iam"`.
+
+- **languages**: array of programming languages implemented IN this project's source code. Derive from the file tree and parsed manifests. NOT subject-matter languages discussed in the content. Empty array for docs-only projects.
+
+- **license**: SPDX expression as a single string, OR null if absent. If the facts include `license_filename` but you can't determine the SPDX identifier from manifests/README alone, return the filename (e.g. `"LICENSE.md"`) rather than guessing. Many CoSAI projects use `"CC-BY-4.0 AND Apache-2.0"` (dual license declared in README).
+
+- **related_urls**: array of repository URLs that appear in `readme_md_content`. Each URL must be present, verbatim, in the README text.
+  - Include full repo URLs and deep-links (e.g. `https://github.com/cosai-oasis/secure-ai-tooling/tree/main/risk-map`).
+  - Include external repos too, not just workspace peers.
+  - Skip badge URLs (e.g. shields.io, img.shields.io), CI status URLs, and pure-image asset links.
+  - Skip license URLs unless they point at a repo (e.g. `https://creativecommons.org/licenses/...` is out; `https://github.com/cosai-oasis/oasis-open-project/blob/main/LICENSE.md` is in).
+  - De-duplicate. Order is not significant.
+  - If no qualifying URLs are present in the README, return an empty array.
+  - DO NOT invent URLs. Every entry must appear in the README text as given; the indexer drops URLs that don't.
+
+## 2. entry_plan
+
+Which files Stages 2a/2b/2c should process. Each list is empty by default; only include items you're confident about. Don't pad.
+
+- **packages**: array of `{manifest_path, language, ecosystem, name, reason}`.
+  - Use ONE entry per installable artifact. Tool-config-only manifests (`pyproject.toml` with only `[tool.pytest]`, `package.json` with only dev-dependencies and no `name`) are NOT packages.
+  - `manifest_path` is the path to the recognized manifest file (e.g. `"pyproject.toml"`, `"src/codeguard-mcp/pyproject.toml"`, `"src/whitepaper-converter/devcontainer-feature.json"`).
+  - `ecosystem`: ONE of: `pypi | npm | go | cargo | source | vendor | claude-plugin | mcp-server | devcontainer-feature | none`
+    Pick the consumption-facing answer:
+    - Use `pypi` only when the package is actually published to PyPI. A local-only Python project installed via `pip install -e .` is `source`, not `pypi`.
+    - Use `npm` only when actually published. Local-only is `source`.
+    - `mcp-server` for runnable MCP servers; `claude-plugin` for Claude Code plugins; `devcontainer-feature` for VS Code devcontainer features.
+
+- **snippets**: array of `{path, language, reason}`.
+  - Each entry is one notable code pattern worth surfacing for "I want to copy this." Examples: a multi-provider LLM dispatcher, a hash-based skip pattern, a runnable demo notebook.
+  - Be conservative. Don't list every file in `src/` — only notable patterns a downstream user would want to find.
+  - Files under `examples/`, `cookbook/`, `recipes/`, `practical-guides/examples/` are strong candidates.
+
+- **references**: array of `{path, form, reason}`.
+  - Each markdown document worth chunking into reference entries.
+  - `form`: ONE of: `prose | structured | mixed`
+  - Skip files baselined out by the indexer (`LICENSE`, `CODE-OF-CONDUCT`, `CONTRIBUTING`). Skip PDFs (the indexer ignores them when adjacent `.md` exists).
+  - Include the README. Include other root-level documents that have real content (`CHARTER`, `WORKSTREAMS`, etc. when present).
+
+## Guidance on unreliable inputs
+
+- The README's leading paragraphs are often boilerplate copied between CoSAI projects. Don't weight them.
+- If a manifest's `declares_package` field is `false`, treat that manifest as tool configuration only — do NOT include a package entry for it.
+- The `workspace_project_slugs` list contains every other project in the workspace. Use it as the universe of valid `builds_on.project` values.
+
+## Project facts
+
+{project_facts}
