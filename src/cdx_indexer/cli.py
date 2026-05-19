@@ -12,6 +12,7 @@ import click
 
 from . import __version__
 from .manifest import build_manifest
+from .packages import run_packages
 from .planner import PlannerOutput, run_planner
 from .scan import scan_project
 from .types import Manifest
@@ -19,6 +20,7 @@ from .writer import (
     resolve_output_dir,
     write_empty_jsonl,
     write_manifest,
+    write_packages_jsonl,
     write_stage1_state,
 )
 
@@ -136,14 +138,27 @@ def build(
     click.echo(f"Output: {resolved.output_dir}  ({resolved.reason})")
 
     manifest_path = write_manifest(resolved.output_dir, manifest)
-    pkg_path = write_empty_jsonl(resolved.output_dir, "packages.jsonl")
+
+    # Stage 2a: packages.
+    click.echo("Stage 2a: packages...")
+    packages = run_packages(
+        scan,
+        plan.entry_plan_packages,
+        project_path,
+        model=model,
+    )
+    pkg_path = write_packages_jsonl(resolved.output_dir, packages)
+    manifest.counts.packages = len(packages)
+    write_manifest(resolved.output_dir, manifest)  # Re-write with updated counts.
+    click.echo(f"  {len(packages)} package(s)")
+
     snip_path = write_empty_jsonl(resolved.output_dir, "snippets.jsonl")
     ref_path = write_empty_jsonl(resolved.output_dir, "references.jsonl")
     stage1_path = write_stage1_state(resolved.output_dir, scan, plan, thread_id or "")
 
     click.echo("Wrote:")
     click.echo(f"  {manifest_path.relative_to(resolved.output_dir.parent)}")
-    click.echo(f"  {pkg_path.relative_to(resolved.output_dir.parent)}  (empty)")
+    click.echo(f"  {pkg_path.relative_to(resolved.output_dir.parent)}  ({len(packages)} package(s))")
     click.echo(f"  {snip_path.relative_to(resolved.output_dir.parent)}  (empty)")
     click.echo(f"  {ref_path.relative_to(resolved.output_dir.parent)}  (empty)")
     click.echo(f"  {stage1_path.relative_to(resolved.output_dir.parent)}  (Stage 1 state)")

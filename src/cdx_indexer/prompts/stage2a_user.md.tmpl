@@ -1,0 +1,31 @@
+<!--
+Stage 2a user prompt template for a single package.
+
+Loaded by src/cdx_indexer/packages.py. The placeholder {package_facts} is
+replaced with the JSON-serialised PackageFacts via .replace() (not .format()),
+so the prompt body can contain literal { and } characters freely.
+-->
+
+## Package facts
+
+{package_facts}
+
+## Task
+
+Summarize this package in JSON with the shape:
+
+```json
+{
+  "summary": "<1–3 sentences describing what the package does and who would use it>",
+  "public_api": ["<exported symbol 1>", "<exported symbol 2>", ...],
+  "tags": ["<kebab-case keyword 1>", "<kebab-case keyword 2>", ...]
+}
+```
+
+**Guidelines:**
+
+- **summary**: Clear, specific. If the README excerpt describes the package clearly, use it as a base. If entrypoints suggest the use-case (e.g., a CLI command named `index-scan`), incorporate that.
+- **public_api**: **Only for packages that expose importable code.** List 3–8 exported classes, functions, or symbols a downstream user would import. For CLI-only tools (ecosystem: "source", kind: "cli"), this is typically empty. For libraries, pick the most important/frequent symbols. Empty array if the package has no public API.
+- **tags**: Domain-specific and language-specific keywords. Examples from the projects: `"python"`, `"async"`, `"prometheus"`, `"telemetry"`, `"mcp-server"`, `"security-scanning"`, `"rules-engine"`, `"llm-integration"`. Do not repeat the ecosystem or language if already obvious.
+
+Respond ONLY with a single JSON object.

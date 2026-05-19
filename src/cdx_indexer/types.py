@@ -11,6 +11,45 @@ from typing import Any
 
 
 @dataclass
+class Package:
+    """Package entry in packages.jsonl."""
+
+    id: str
+    category: str = "package"
+    kind: str = "library"
+    name: str = ""
+    language: str = ""
+    ecosystem: str = ""
+    version: str | None = None
+    entrypoints: list[str] = field(default_factory=list)
+    public_api: list[str] = field(default_factory=list)
+    path: str = ""
+    install: str = ""
+    summary: str = ""
+    tags: list[str] = field(default_factory=list)
+    content_hash: str = ""
+
+    def to_dict(self) -> dict[str, Any]:
+        out: dict[str, Any] = {
+            "id": self.id,
+            "category": self.category,
+            "kind": self.kind,
+            "name": self.name,
+            "language": self.language,
+            "ecosystem": self.ecosystem,
+            "version": self.version,
+            "entrypoints": list(self.entrypoints),
+            "public_api": list(self.public_api),
+            "path": self.path,
+            "install": self.install,
+            "summary": self.summary,
+            "tags": list(self.tags),
+            "content_hash": self.content_hash,
+        }
+        return out
+
+
+@dataclass
 class LastCommit:
     sha: str
     date: str  # ISO-8601

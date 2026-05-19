@@ -130,6 +130,7 @@ Singleton, project-wide. Used by `list_projects` for discovery and by manifest-l
 | `cli` | Command-line tool. |
 | `service` | Runnable server (MCP server, HTTP service, daemon). |
 | `claude-plugin` | Claude Code plugin or skill bundle. |
+| `devcontainer-feature` | VS Code devcontainer feature (installed into a build environment to provide tools). |
 | `ruleset` | Structured guidance content (rules, prompts, policies). |
 | `docs` | Documentation site. |
 | `whitepaper` | Single-document research output. |
@@ -191,7 +192,8 @@ A nested manifest produces its own entry **only if it declares an installable ar
 ```json
 {
   "id": "pkg:<project>/<name>",
-  "kind": "package",
+  "category": "package",
+  "kind": "library | cli | service | claude-plugin | devcontainer-feature | other",
   "name": "<name>",
   "language": "<implementation language>",
   "ecosystem": "pypi | npm | go | cargo | source | vendor | claude-plugin | mcp-server | devcontainer-feature | none",
@@ -211,7 +213,8 @@ A nested manifest produces its own entry **only if it declares an installable ar
 | Field | Purpose | Notes |
 |---|---|---|
 | `id` | store | Stable identifier: `pkg:<project>/<name>`. |
-| `kind` | filter | Always `"package"` for entries in this file. |
+| `category` | filter | Always `"package"`. Shared across all JSONL files; see [`category` values](#category-values). |
+| `kind` | filter | What the package is (library, cli, service, etc.). Uses the same enum as manifest `primary_kind`. See [`kind` values](#kind-values). |
 | `name` | filter | Package name as it would be installed or imported. |
 | `language` | filter | Implementation language. Single value per entry — Rule 2. |
 | `ecosystem` | filter | Where and how the package is installed. See enum below. |
@@ -241,6 +244,31 @@ A nested manifest produces its own entry **only if it declares an installable ar
 
 Single value per entry — pick the consumption-facing answer (how does a downstream user get and use this?). Install mechanics live in the free-text `install` field.
 
+### `kind` values
+
+| Value | Meaning |
+|---|---|
+| `library` | Importable code package. |
+| `cli` | Command-line tool. |
+| `service` | Runnable server (MCP server, HTTP service, daemon). |
+| `claude-plugin` | Claude Code plugin or skill bundle. |
+| `devcontainer-feature` | VS Code devcontainer feature (installed into a build environment to provide tools). |
+| `ruleset` | Structured guidance content (rules, prompts, policies). |
+| `docs` | Documentation. |
+| `whitepaper` | Research output. |
+| `working-group` | Meeting notes, governance artifacts. |
+| `dataset` | Structured non-code data. |
+| `template` | Template for downstream use. |
+| `other` | Doesn't fit the above. Use sparingly. |
+
+### `category` values
+
+| Value | Meaning | File |
+|---|---|---|
+| `"package"` | Importable or installable unit. | `packages.jsonl` |
+| `"snippet"` | Notable code pattern. | `snippets.jsonl` |
+| `"reference"` | Doc chunk or structured artifact. | `references.jsonl` |
+
 ## `snippets.jsonl`
 
 One line per notable code pattern. Each snippet has a single `language` — multi-language examples become multiple entries.
@@ -261,7 +289,8 @@ A file is excluded if it carries `cosai-index: ignore` or sits under a test path
 ```json
 {
   "id": "snip:<project>/<slug>",
-  "kind": "snippet",
+  "category": "snippet",
+  "kind": "library | cli | service | claude-plugin | devcontainer-feature | other",
   "title": "<short title>",
   "path": "<rel-path>",
   "lines": "<start>-<end>",
@@ -279,7 +308,8 @@ A file is excluded if it carries `cosai-index: ignore` or sits under a test path
 | Field | Purpose | Notes |
 |---|---|---|
 | `id` | store | `snip:<project>/<slug>`. |
-| `kind` | filter | Always `"snippet"`. |
+| `category` | filter | Always `"snippet"`. Shared across all JSONL files; see [`category` values](#category-values). |
+| `kind` | filter | What kind of pattern this is (library, cli, service, etc.). Uses the same enum as manifest `primary_kind`. See [`kind` values](#kind-values). |
 | `title` | embed | Short. Names the pattern. |
 | `path` | store | Repo-relative path. |
 | `lines` | store | Range within the file, e.g. `"42-118"`. |
@@ -301,7 +331,8 @@ The same knowledge can come in different forms — a whitepaper section and a st
 ```json
 {
   "id": "ref:<project>/<doc>#<anchor>",
-  "kind": "reference",
+  "category": "reference",
+  "kind": "docs | whitepaper | working-group | ruleset | dataset | other",
   "title": "<heading or artifact title>",
   "doc": "<rel-doc-path>",
   "section_path": ["H1", "H2", "..."],
@@ -322,7 +353,8 @@ The same knowledge can come in different forms — a whitepaper section and a st
 | Field | Purpose | Notes |
 |---|---|---|
 | `id` | store | `ref:<project>/<doc>#<anchor>`. |
-| `kind` | filter | Always `"reference"`. |
+| `category` | filter | Always `"reference"`. Shared across all JSONL files; see [`category` values](#category-values). |
+| `kind` | filter | What kind of reference this is (docs, whitepaper, ruleset, etc.). Subset of manifest `primary_kind`. See [`kind` values](#kind-values). |
 | `title` | embed | Heading text or artifact title. |
 | `doc` | store | Source document path. |
 | `section_path` | store | Heading breadcrumb, e.g. `["Architecture", "Indexing", "Embeddings"]`. |

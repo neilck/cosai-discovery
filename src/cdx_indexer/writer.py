@@ -13,7 +13,7 @@ from dataclasses import asdict, dataclass, is_dataclass
 from pathlib import Path
 from typing import Any
 
-from .types import Manifest
+from .types import Manifest, Package
 
 
 @dataclass
@@ -96,6 +96,30 @@ def write_empty_jsonl(output_dir: Path, name: str) -> Path:
     return target
 
 
+def write_packages_jsonl(output_dir: Path, packages: list[Package]) -> Path:
+    """Atomically write packages.jsonl from a list of Package entries."""
+    target = output_dir / "packages.jsonl"
+    output_dir.mkdir(parents=True, exist_ok=True)
+    fd, tmp_path = tempfile.mkstemp(
+        prefix=target.name + ".",
+        suffix=".tmp",
+        dir=target.parent,
+    )
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8") as f:
+            for pkg in packages:
+                f.write(json.dumps(pkg.to_dict(), ensure_ascii=False) + "\n")
+        os.chmod(tmp_path, 0o644)
+        os.replace(tmp_path, target)
+    except Exception:
+        try:
+            os.unlink(tmp_path)
+        except OSError:
+            pass
+        raise
+    return target
+
+
 def write_stage1_state(output_dir: Path, scan: Any, plan: Any, thread_id: str) -> Path:
     """Write the Stage 1 state to `_stage1.json` for human inspection and audit.
 
@@ -139,6 +163,7 @@ def _write_json_atomic(target: Path, data: dict) -> None:
         with os.fdopen(fd, "w", encoding="utf-8") as f:
             json.dump(data, f, indent=2, ensure_ascii=False)
             f.write("\n")
+        os.chmod(tmp_path, 0o644)
         os.replace(tmp_path, target)
     except Exception:
         # Best-effort cleanup.

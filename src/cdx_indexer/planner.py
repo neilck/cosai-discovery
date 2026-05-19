@@ -34,9 +34,21 @@ from .scan import ProjectScan
 DEFAULT_MODEL = "claude-haiku-4-5"
 DEFAULT_MODEL_STRONG = "claude-sonnet-4-6"
 
-# Default location for the LangGraph checkpoint database. The directory is
-# created on demand.
-DEFAULT_CHECKPOINT_DB = ".data/checkpoints.db"
+# Default location for the LangGraph checkpoint database, anchored to the
+# repo root (the directory containing pyproject.toml). Walking up from this
+# file's location avoids creating stray .data/ directories under whatever
+# directory the user happened to invoke `cdx-index` from.
+def _find_repo_root() -> Path:
+    """Walk up from this file to find the directory containing pyproject.toml."""
+    here = Path(__file__).resolve()
+    for parent in here.parents:
+        if (parent / "pyproject.toml").is_file():
+            return parent
+    # Fallback: cwd. Should never hit this in a normal install.
+    return Path.cwd()
+
+
+DEFAULT_CHECKPOINT_DB = str(_find_repo_root() / ".data" / "checkpoints.db")
 
 
 # -------- Prompts (loaded from package-data files) --------

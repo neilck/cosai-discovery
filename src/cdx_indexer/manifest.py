@@ -133,6 +133,21 @@ def parse_cargo(cargo_path: Path) -> dict | None:
         return None
 
 
+def parse_go_mod(go_mod_path: Path) -> dict | None:
+    """Return parsed go.mod info. Go.mod doesn't have versions; returns minimal dict."""
+    try:
+        content = go_mod_path.read_text(encoding="utf-8", errors="replace")
+        # Extract module name from first line.
+        for line in content.splitlines()[:30]:
+            line = line.strip()
+            if line.startswith("module "):
+                module = line[len("module "):].strip()
+                return {"module": module}
+    except OSError:
+        pass
+    return {}
+
+
 # -------- License (filename only — no content parsing) --------
 
 
