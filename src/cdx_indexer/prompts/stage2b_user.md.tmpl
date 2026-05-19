@@ -1,0 +1,31 @@
+<!--
+Stage 2b user prompt template for a single snippet.
+
+Loaded by src/cdx_indexer/snippets.py. The placeholder {snippet_facts} is
+replaced with the JSON-serialised SnippetFacts via .replace() (not .format()),
+so the prompt body can contain literal { and } characters freely.
+-->
+
+## Snippet facts
+
+{snippet_facts}
+
+## Task
+
+Summarize this snippet in JSON with the shape:
+
+```json
+{
+  "title": "<2–6 word name>",
+  "summary": "<1–3 sentences>",
+  "tags": ["<kebab-case keyword 1>", "<kebab-case keyword 2>", ...]
+}
+```
+
+**Guidelines:**
+
+- **title**: Names the *pattern*, not the file. "Async retry wrapper" beats "retry.py".
+- **summary**: What it does AND when an agent would want to copy it. Mention non-obvious behavior (caching, retries, fallbacks).
+- **tags**: Specific. Use the language, the domain (e.g. `"telemetry"`, `"security-scanning"`), and the technique (e.g. `"async"`, `"file-hashing"`, `"streaming"`). Avoid generic tags like `"code"` or `"example"`.
+
+Respond ONLY with a single JSON object.

@@ -295,7 +295,6 @@ A file is excluded if it carries `cosai-index: ignore` or sits under a test path
   "path": "<rel-path>",
   "lines": "<start>-<end>",
   "language": "<implementation language>",
-  "symbol": "<function or class name>",
   "summary": "<embedded prose>",
   "tags": ["..."],
   "depends_on": ["..."],
@@ -314,7 +313,6 @@ A file is excluded if it carries `cosai-index: ignore` or sits under a test path
 | `path` | store | Repo-relative path. |
 | `lines` | store | Range within the file, e.g. `"42-118"`. |
 | `language` | filter | The snippet's language. Single value — Rule 2. |
-| `symbol` | filter | Function or class name if applicable. |
 | `summary` | embed | What the pattern does, when to use it. |
 | `tags` | filter | Free-form. |
 | `depends_on` | store | Imports the snippet actually uses (not the file's full import block), plus same-directory supporting files for notebook snippets. |

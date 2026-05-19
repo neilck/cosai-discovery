@@ -13,7 +13,7 @@ from dataclasses import asdict, dataclass, is_dataclass
 from pathlib import Path
 from typing import Any
 
-from .types import Manifest, Package
+from .types import Manifest, Package, Snippet
 
 
 @dataclass
@@ -98,8 +98,17 @@ def write_empty_jsonl(output_dir: Path, name: str) -> Path:
 
 def write_packages_jsonl(output_dir: Path, packages: list[Package]) -> Path:
     """Atomically write packages.jsonl from a list of Package entries."""
-    target = output_dir / "packages.jsonl"
-    output_dir.mkdir(parents=True, exist_ok=True)
+    return _write_jsonl_atomic(output_dir / "packages.jsonl", [p.to_dict() for p in packages])
+
+
+def write_snippets_jsonl(output_dir: Path, snippets: list[Snippet]) -> Path:
+    """Atomically write snippets.jsonl from a list of Snippet entries."""
+    return _write_jsonl_atomic(output_dir / "snippets.jsonl", [s.to_dict() for s in snippets])
+
+
+def _write_jsonl_atomic(target: Path, rows: list[dict]) -> Path:
+    """Atomically write a list of JSON-encodable dicts as JSONL."""
+    target.parent.mkdir(parents=True, exist_ok=True)
     fd, tmp_path = tempfile.mkstemp(
         prefix=target.name + ".",
         suffix=".tmp",
@@ -107,8 +116,8 @@ def write_packages_jsonl(output_dir: Path, packages: list[Package]) -> Path:
     )
     try:
         with os.fdopen(fd, "w", encoding="utf-8") as f:
-            for pkg in packages:
-                f.write(json.dumps(pkg.to_dict(), ensure_ascii=False) + "\n")
+            for row in rows:
+                f.write(json.dumps(row, ensure_ascii=False) + "\n")
         os.chmod(tmp_path, 0o644)
         os.replace(tmp_path, target)
     except Exception:

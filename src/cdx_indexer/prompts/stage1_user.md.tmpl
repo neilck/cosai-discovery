@@ -69,9 +69,11 @@ Which files Stages 2a/2b/2c should process. Each list is empty by default; only 
     - `mcp-server` for runnable MCP servers; `claude-plugin` for Claude Code plugins; `devcontainer-feature` for VS Code devcontainer features.
 
 - **snippets**: array of `{path, language, reason}`.
-  - Each entry is one notable code pattern worth surfacing for "I want to copy this." Examples: a multi-provider LLM dispatcher, a hash-based skip pattern, a runnable demo notebook.
+  - Each entry is one notable **code pattern** worth surfacing for "I want to copy this." Examples: a multi-provider LLM dispatcher, a hash-based skip pattern, a runnable demo notebook.
+  - Snippets are CODE files — `.py`, `.ts`, `.js`, `.go`, `.ipynb`, `.lua`, `.sh`, `.yml` (when the YAML is executable config like a Sigma rule), etc.
+  - **Not snippets:** markdown documents (`.md`, `.mdx`), skill bundles, prompt templates, rule definitions written in prose, READMEs, charters, guidelines. These belong in `references`, not `snippets`. A file describing what to do (instructions for humans or LLMs) is reference content, even if it lives under a `skills/` or `examples/` directory.
   - Be conservative. Don't list every file in `src/` — only notable patterns a downstream user would want to find.
-  - Files under `examples/`, `cookbook/`, `recipes/`, `practical-guides/examples/` are strong candidates.
+  - Files under `examples/`, `cookbook/`, `recipes/`, `practical-guides/examples/` are strong candidates **when they contain code**.
 
 - **references**: array of `{path, form, reason}`.
   - Each markdown document worth chunking into reference entries.
