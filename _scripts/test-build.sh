@@ -10,8 +10,15 @@
 #   _scripts/test-build.sh --all                        # run against all 10
 #   _scripts/test-build.sh --all --no-llm               # all, no LLM calls
 #
+# Optional environment variables:
+#   CDX_EMBED=1    appends --embed to every invocation (Phase 6).
+#                  Requires VOYAGE_API_KEY in env or .env.
+#   CDX_MODEL=...  overrides Stage 1+ model (e.g. claude-sonnet-4-6).
+#
 # Output for each project goes to:
 #   <repo>/.cosai-indexes/<project>/
+# Vector store (when --embed is on) lives at:
+#   <repo>/.cosai-indexes/.data/index.db
 #
 # Re-run after editing prompt or code; existing output is overwritten.
 
@@ -75,10 +82,17 @@ run_one() {
   echo "============================================================"
   echo "$project"
   echo "============================================================"
+
+  local embed_flag=()
+  if [ "${CDX_EMBED:-0}" = "1" ]; then
+    embed_flag=(--embed)
+  fi
+
   local rc=0
   "$CDX" build "$project_path" \
     --sidecar \
     --workspace-root "$REPO_ROOT" \
+    ${embed_flag[@]+"${embed_flag[@]}"} \
     ${extra_args[@]+"${extra_args[@]}"} || rc=$?
   echo ""
   return "$rc"
