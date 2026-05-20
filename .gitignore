@@ -29,10 +29,8 @@ htmlcov/
 !.vscode/settings.json.example
 .idea/
 
-# Indexer state
-.data/
-
-# Local sidecar indexes produced during indexer development
+# Indexer runtime data (checkpoints, vectors, generated indexes)
+.cdx/
 .cosai-indexes/
 
 # API keys and local config — never commit

@@ -18,7 +18,7 @@
 # Output for each project goes to:
 #   <repo>/.cosai-indexes/<project>/
 # Vector store (when --embed is on) lives at:
-#   <repo>/.cosai-indexes/.data/index.db
+#   <repo>/.cdx/vectors.db
 #
 # Re-run after editing prompt or code; existing output is overwritten.
 
@@ -90,8 +90,6 @@ run_one() {
 
   local rc=0
   "$CDX" build "$project_path" \
-    --sidecar \
-    --workspace-root "$REPO_ROOT" \
     ${embed_flag[@]+"${embed_flag[@]}"} \
     ${extra_args[@]+"${extra_args[@]}"} || rc=$?
   echo ""

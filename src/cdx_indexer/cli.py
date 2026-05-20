@@ -1,7 +1,11 @@
 """CLI entry point for cdx-index.
 
-Stage 0 (deterministic scan) → Stage 1 (LLM classification + entry plan)
-→ writer. Subsequent stages (per-entry processing, embedding) come later.
+Configuration is loaded from cdx-config.yaml (auto-discovered by walking up
+from cwd) or explicitly via --config. All paths are resolved relative to
+the config file's directory.
+
+Pipeline: Stage 0 (scan) → Stage 1 (plan) → Stage 2a/2b/2c (summaries)
+→ Stage 3 (embed, optional).
 """
 
 from __future__ import annotations
@@ -11,6 +15,8 @@ from pathlib import Path
 import click
 
 from . import __version__
+from .chat import VectorSearcher, chat_loop
+from .config import CdxConfig
 from .embed import embed_index_files
 from .manifest import build_manifest
 from .packages import run_packages
@@ -32,8 +38,20 @@ from .writer import (
 
 @click.group()
 @click.version_option(__version__)
-def cli():
+@click.option(
+    "--config",
+    type=click.Path(exists=True, file_okay=True, dir_okay=False, path_type=Path),
+    default=None,
+    help=(
+        "Path to cdx-config.yaml. Auto-discovered from cwd by default. "
+        "Paths in the config are relative to its directory."
+    ),
+)
+@click.pass_context
+def cli(ctx: click.Context, config: Path | None):
     """COSAI Discovery indexer."""
+    ctx.ensure_object(dict)
+    ctx.obj["config"] = CdxConfig.load(config_path=config)
 
 
 @cli.command()
@@ -46,64 +64,49 @@ def cli():
     "--output",
     "output_path",
     type=click.Path(file_okay=False, path_type=Path),
-    help=(
-        "Where to write index files. Defaults to PROJECT_PATH/.cosai-index/ "
-        "if writable, else <workspace-root>/.cosai-indexes/<slug>/."
-    ),
-)
-@click.option(
-    "--sidecar",
-    is_flag=True,
-    help="Force sidecar location even when project is writable.",
-)
-@click.option(
-    "--workspace-root",
-    type=click.Path(exists=True, file_okay=False, path_type=Path),
-    help="Override inferred workspace root. Default: dirname(PROJECT_PATH).",
+    default=None,
+    help="Explicit output path. Default: uses sidecar location from config.",
 )
 @click.option(
     "--force",
     is_flag=True,
     help=(
-        "Ignore any existing Stage 1 checkpoint and re-run the LLM call. "
-        "Use when the prompt has changed or the cached output is stale."
+        "Ignore Stage 1 checkpoint; re-call the LLM. "
+        "Use after editing a prompt."
     ),
 )
 @click.option(
     "--model",
     type=str,
     default=None,
-    help="Override the model used for Stage 1. Default: claude-haiku-4-5 (or $CDX_MODEL).",
+    help=(
+        "Override the model. Pass 'strong' for models.strong from config, "
+        "or a model name directly. Default: from config or $CDX_MODEL."
+    ),
 )
 @click.option(
     "--verbose",
     "-v",
     is_flag=True,
-    help="Show the raw LLM response for debugging.",
+    help="Show LLM responses + embed trace.",
 )
 @click.option(
     "--embed",
     "do_embed",
     is_flag=True,
-    help=(
-        "After writing files, embed entries via Voyage and upsert vectors to the "
-        "workspace vector store. Requires VOYAGE_API_KEY."
-    ),
+    help="Embed via Voyage after writing files. Requires VOYAGE_API_KEY.",
 )
 @click.option(
     "--db-path",
     type=click.Path(file_okay=True, dir_okay=False, path_type=Path),
     default=None,
-    help=(
-        "Override the vector-store path. Default: "
-        "<workspace-root>/.cosai-indexes/.data/index.db"
-    ),
+    help="Override vector store path. Default: from config.",
 )
+@click.pass_context
 def build(
+    ctx: click.Context,
     project_path: Path | None,
     output_path: Path | None,
-    sidecar: bool,
-    workspace_root: Path | None,
     force: bool,
     model: str | None,
     verbose: bool,
@@ -111,6 +114,7 @@ def build(
     db_path: Path | None,
 ):
     """Build the index for one project."""
+    cfg: CdxConfig = ctx.obj["config"]
     project_path = (project_path or Path.cwd()).resolve()
     if not project_path.is_dir():
         raise click.BadParameter(f"PROJECT_PATH is not a directory: {project_path}")
@@ -119,7 +123,7 @@ def build(
 
     # Stage 0: deterministic scan.
     click.echo("Stage 0: scanning project...")
-    scan = scan_project(project_path, workspace_root=workspace_root)
+    scan = scan_project(project_path, workspace_root=cfg.workspace_root)
     click.echo(
         f"  {scan.file_tree_full_count} files, "
         f"{len(scan.pyproject_tomls)} pyproject.toml, "
@@ -131,14 +135,17 @@ def build(
     )
 
     # Start from the manifest skeleton (placeholders + deterministic facts).
-    manifest = build_manifest(project_path, workspace_root=workspace_root)
+    manifest = build_manifest(project_path, workspace_root=cfg.workspace_root)
 
     # Stage 1: LLM classification + entry plan (with checkpoint reuse).
     plan: PlannerOutput | None = None
     thread_id: str | None = None
-    click.echo(f"Stage 1: planning via {model or '<default model>'}{' (forced)' if force else ''}...")
+    resolved_model = cfg.get_model(model)
+    click.echo(f"Stage 1: planning via {resolved_model}{' (forced)' if force else ''}...")
     try:
-        result = run_planner(scan, model=model, force=force)
+        result = run_planner(
+            scan, model=resolved_model, force=force, checkpoint_db_path=cfg.checkpoints_db
+        )
     except Exception as exc:  # noqa: BLE001
         raise click.ClickException(f"Stage 1 failed: {exc}") from exc
     plan = result.output
@@ -157,8 +164,8 @@ def build(
     resolved = resolve_output_dir(
         project_path=project_path,
         output=output_path,
-        sidecar=sidecar,
-        workspace_root=workspace_root,
+        sidecar=cfg.sidecar,
+        workspace_root=cfg.workspace_root,
     )
     click.echo(f"Output: {resolved.output_dir}  ({resolved.reason})")
 
@@ -170,7 +177,8 @@ def build(
         scan,
         plan.entry_plan_packages,
         project_path,
-        model=model,
+        model=resolved_model,
+        checkpoint_db_path=cfg.checkpoints_db,
     )
     pkg_path = write_packages_jsonl(resolved.output_dir, packages)
     manifest.counts.packages = len(packages)
@@ -182,7 +190,8 @@ def build(
         scan,
         plan.entry_plan_snippets,
         project_path,
-        model=model,
+        model=resolved_model,
+        checkpoint_db_path=cfg.checkpoints_db,
     )
     snip_path = write_snippets_jsonl(resolved.output_dir, snippets)
     manifest.counts.snippets = len(snippets)
@@ -194,7 +203,8 @@ def build(
         scan,
         plan.entry_plan_references,
         project_path,
-        model=model,
+        model=resolved_model,
+        checkpoint_db_path=cfg.checkpoints_db,
     )
     ref_path = write_references_jsonl(resolved.output_dir, references)
     manifest.counts.references = len(references)
@@ -215,8 +225,9 @@ def build(
     _print_summary(manifest, plan)
 
     # Phase 6: optional embedding.
-    if do_embed:
-        resolved_db = db_path or _default_db_path(resolved.output_dir, workspace_root)
+    do_embed_now = do_embed or cfg.embed_enabled
+    if do_embed_now:
+        resolved_db = db_path or cfg.vectors_db
         click.echo()
         click.echo(f"Embedding via Voyage; DB: {resolved_db}")
         try:
@@ -235,22 +246,6 @@ def build(
         )
 
 
-def _default_db_path(output_dir: Path, workspace_root: Path | None) -> Path:
-    """Default vector store: <workspace-root>/.cosai-indexes/.data/index.db.
-
-    When `output_dir` already lives under `.cosai-indexes/<slug>/`, the parent
-    is the right anchor. Otherwise fall back to workspace_root or its parent.
-    """
-    # If output_dir's parent ends with .cosai-indexes, that's the workspace root anchor.
-    parent = output_dir.parent
-    if parent.name == ".cosai-indexes":
-        return parent / ".data" / "index.db"
-    if workspace_root is not None:
-        return workspace_root.resolve() / ".cosai-indexes" / ".data" / "index.db"
-    # Last resort: alongside the output dir.
-    return output_dir.parent / ".cosai-indexes" / ".data" / "index.db"
-
-
 @cli.command()
 @click.argument(
     "workspace_path",
@@ -261,7 +256,7 @@ def _default_db_path(output_dir: Path, workspace_root: Path | None) -> Path:
     "--db-path",
     type=click.Path(file_okay=True, dir_okay=False, path_type=Path),
     default=None,
-    help="Override the vector-store path. Default: <workspace>/.cosai-indexes/.data/index.db",
+    help="Override vector-store path. Default: from config.",
 )
 @click.option(
     "--project",
@@ -276,7 +271,9 @@ def _default_db_path(output_dir: Path, workspace_root: Path | None) -> Path:
     is_flag=True,
     help="Emit machine-readable JSON.",
 )
+@click.pass_context
 def status(
+    ctx: click.Context,
     workspace_path: Path | None,
     db_path: Path | None,
     only_project: str | None,
@@ -285,14 +282,16 @@ def status(
     """Show per-project index + vector-store status."""
     import json as _json
 
-    workspace_path = (workspace_path or Path.cwd()).resolve()
-    indexes_root = workspace_path / ".cosai-indexes"
+    cfg: CdxConfig = ctx.obj["config"]
+    workspace_path = (workspace_path or cfg.workspace_root).resolve()
+    indexes_root = workspace_path / cfg.indexes_dir.name
+
     if not indexes_root.exists():
         raise click.ClickException(
-            f"No .cosai-indexes/ directory under {workspace_path}. Run a build first."
+            f"No {cfg.indexes_dir.name}/ directory under {workspace_path}. Run a build first."
         )
 
-    db_resolved = db_path or (indexes_root / ".data" / "index.db")
+    db_resolved = db_path or cfg.vectors_db
 
     project_dirs = sorted(
         [p for p in indexes_root.iterdir() if p.is_dir() and p.name != ".data"]
@@ -309,9 +308,29 @@ def status(
     if db_resolved.exists():
         store = VectorStore.open(db_resolved)
 
+    # Open checkpoints DB if it exists
+    checkpoints_by_project = {}
+    if cfg.checkpoints_db.exists():
+        import sqlite3
+        try:
+            conn = sqlite3.connect(cfg.checkpoints_db)
+            cursor = conn.cursor()
+            for pdir in project_dirs:
+                project_slug = pdir.name
+                cursor.execute(
+                    "SELECT COUNT(*) FROM checkpoints WHERE thread_id LIKE ? OR thread_id LIKE ?",
+                    (f"{project_slug}:%", f"{project_slug}@%"),
+                )
+                row = cursor.fetchone()
+                checkpoints_by_project[project_slug] = row[0] if row else 0
+            conn.close()
+        except Exception:
+            pass
+
     try:
         for pdir in project_dirs:
             row = _status_for(pdir, store)
+            row["checkpoints"] = checkpoints_by_project.get(pdir.name, 0)
             rows.append(row)
     finally:
         if store is not None:
@@ -326,7 +345,7 @@ def status(
         return
 
     # Human-readable table.
-    header = ("project", "schema", "last_indexed", "stale", "M", "P", "S", "R", "vec", "in_sync")
+    header = ("project", "schema", "last_indexed", "stale", "M", "P", "S", "R", "vec", "chk", "in_sync")
     widths = [
         max(len(header[0]), *(len(r["project"]) for r in rows)),
         len(header[1]),
@@ -336,6 +355,7 @@ def status(
         3,
         3,
         3,
+        4,
         4,
         7,
     ]
@@ -354,6 +374,7 @@ def status(
                 str(r["counts"]["snippets"]),
                 str(r["counts"]["references"]),
                 str(r["vectors"]),
+                str(r.get("checkpoints", 0)),
                 "yes" if r["in_sync"] else "no",
             )
         )
@@ -361,6 +382,21 @@ def status(
     if not db_resolved.exists():
         click.echo()
         click.echo(f"(Vector store does not exist yet at {db_resolved})")
+
+
+@cli.command()
+@click.argument("projects", nargs=-1, type=str)
+@click.pass_context
+def chat(ctx: click.Context, projects: tuple[str, ...]):
+    """Chat with indexed projects (vector search-augmented Q&A)."""
+    cfg: CdxConfig = ctx.obj["config"]
+    project_list = list(projects) if projects else None
+
+    try:
+        with VectorSearcher(cfg.vectors_db, cfg.indexes_dir, project_slugs=project_list) as searcher:
+            chat_loop(searcher)
+    except Exception as exc:  # noqa: BLE001
+        raise click.ClickException(str(exc)) from exc
 
 
 def _status_for(project_dir: Path, store: VectorStore | None) -> dict:
@@ -492,30 +528,26 @@ def _read_jsonl_safely(path: Path):
 @cli.command()
 @click.argument("project_slug", type=str)
 @click.option(
-    "--workspace-root",
-    type=click.Path(exists=True, file_okay=False, path_type=Path),
-    help="Workspace root. Default: current directory.",
-)
-@click.option(
     "--db-path",
     type=click.Path(file_okay=True, dir_okay=False, path_type=Path),
     default=None,
-    help="Override the vector-store path.",
+    help="Override vector-store path. Default: from config.",
 )
 @click.option(
     "--dry-run",
     is_flag=True,
     help="Show what would be deleted without modifying the database.",
 )
+@click.pass_context
 def drop(
+    ctx: click.Context,
     project_slug: str,
-    workspace_root: Path | None,
     db_path: Path | None,
     dry_run: bool,
 ):
     """Remove a project's vectors from the store. Files on disk are untouched."""
-    root = (workspace_root or Path.cwd()).resolve()
-    db_resolved = db_path or (root / ".cosai-indexes" / ".data" / "index.db")
+    cfg: CdxConfig = ctx.obj["config"]
+    db_resolved = db_path or cfg.vectors_db
     if not db_resolved.exists():
         raise click.ClickException(f"Vector store does not exist at {db_resolved}")
 
@@ -529,6 +561,165 @@ def drop(
             return
         deleted = store.drop_project(project_slug)
         click.echo(f"Deleted {deleted} vector(s) for '{project_slug}'.")
+
+
+@cli.command()
+@click.argument("project_slug", type=str, required=False)
+@click.option(
+    "--all",
+    "reset_all",
+    is_flag=True,
+    help="Reset all projects (wipe checkpoints.db entirely).",
+)
+@click.option(
+    "--dry-run",
+    is_flag=True,
+    help="Show what would be deleted without modifying the database.",
+)
+@click.pass_context
+def reset(
+    ctx: click.Context,
+    project_slug: str | None,
+    reset_all: bool,
+    dry_run: bool,
+):
+    """Delete LangGraph checkpoints. Forces fresh LLM calls on next build."""
+    import sqlite3
+
+    cfg: CdxConfig = ctx.obj["config"]
+    if not cfg.checkpoints_db.exists():
+        raise click.ClickException(
+            f"Checkpoints database does not exist at {cfg.checkpoints_db}"
+        )
+
+    conn = sqlite3.connect(cfg.checkpoints_db)
+    try:
+        cursor = conn.cursor()
+
+        if reset_all:
+            if dry_run:
+                cursor.execute("SELECT COUNT(*) FROM checkpoints")
+                row = cursor.fetchone()
+                count = row[0] if row else 0
+                click.echo(f"Would delete {count} checkpoint(s).")
+                return
+            with conn:
+                conn.execute("DELETE FROM checkpoints")
+                conn.execute("DELETE FROM writes")
+            click.echo("Deleted all checkpoints.")
+            return
+
+        if not project_slug:
+            raise click.ClickException(
+                "Specify PROJECT_SLUG or use --all. "
+                "Run 'cdx-index reset --help' for usage."
+            )
+
+        # Delete all checkpoints for this project (matches thread_id LIKE 'project-slug:%' OR 'project-slug@%')
+        cursor.execute(
+            "SELECT COUNT(*) FROM checkpoints WHERE thread_id LIKE ? OR thread_id LIKE ?",
+            (f"{project_slug}:%", f"{project_slug}@%"),
+        )
+        count = cursor.fetchone()[0]
+
+        if count == 0:
+            click.echo(f"No checkpoints found for project '{project_slug}'.")
+            return
+
+        if dry_run:
+            click.echo(f"Would delete {count} checkpoint(s) for '{project_slug}'.")
+            return
+
+        with conn:
+            conn.execute(
+                "DELETE FROM checkpoints WHERE thread_id LIKE ? OR thread_id LIKE ?",
+                (f"{project_slug}:%", f"{project_slug}@%"),
+            )
+            conn.execute(
+                "DELETE FROM writes WHERE thread_id LIKE ? OR thread_id LIKE ?",
+                (f"{project_slug}:%", f"{project_slug}@%"),
+            )
+        click.echo(f"Deleted {count} checkpoint(s) for '{project_slug}'.")
+    finally:
+        conn.close()
+
+
+@cli.command()
+@click.argument("project_slug", type=str, required=False)
+@click.option(
+    "--all",
+    "purge_all",
+    is_flag=True,
+    help="Purge all projects' index files.",
+)
+@click.option(
+    "--dry-run",
+    is_flag=True,
+    help="Show what would be deleted without modifying disk.",
+)
+@click.pass_context
+def purge(
+    ctx: click.Context,
+    project_slug: str | None,
+    purge_all: bool,
+    dry_run: bool,
+):
+    """Remove index JSONL files from .cosai-indexes/."""
+    import shutil
+
+    cfg: CdxConfig = ctx.obj["config"]
+    indexes_root = cfg.indexes_dir
+
+    if not indexes_root.exists():
+        raise click.ClickException(f"Indexes directory does not exist at {indexes_root}")
+
+    if purge_all:
+        project_dirs = [
+            p for p in indexes_root.iterdir() if p.is_dir() and p.name != ".data"
+        ]
+        if not project_dirs:
+            click.echo("No projects to purge.")
+            return
+        total_files = sum(
+            sum(1 for _ in p.glob("*.jsonl")) + sum(1 for _ in p.glob("*.json"))
+            for p in project_dirs
+        )
+        if dry_run:
+            click.echo(
+                f"Would delete {len(project_dirs)} project dir(s) ({total_files} file(s))."
+            )
+            return
+        for p in project_dirs:
+            shutil.rmtree(p)
+        click.echo(f"Deleted {len(project_dirs)} project dir(s) ({total_files} file(s)).")
+        return
+
+    if not project_slug:
+        raise click.ClickException(
+            "Specify PROJECT_SLUG or use --all. Run 'cdx-index purge --help' for usage."
+        )
+
+    project_dir = indexes_root / project_slug
+    if not project_dir.exists():
+        raise click.ClickException(
+            f"Index directory does not exist for project '{project_slug}' "
+            f"at {project_dir}"
+        )
+
+    # Count files to delete
+    file_count = sum(1 for _ in project_dir.glob("*.jsonl")) + sum(
+        1 for _ in project_dir.glob("*.json")
+    )
+    if file_count == 0:
+        click.echo(f"No index files found for project '{project_slug}'.")
+        return
+
+    if dry_run:
+        click.echo(f"Would delete {file_count} file(s) for '{project_slug}'.")
+        return
+
+    shutil.rmtree(project_dir)
+    click.echo(f"Deleted {file_count} file(s) for '{project_slug}'.")
 
 
 def _apply_plan_to_manifest(manifest: Manifest, plan: PlannerOutput) -> None:

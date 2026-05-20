@@ -1,0 +1,31 @@
+#!/usr/bin/env bash
+#
+# Set up the venv and run `cdx-index chat`.
+#
+# Usage:
+#   _scripts/start-chat
+
+set -euo pipefail
+
+# Resolve repo root regardless of where the script is invoked from.
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+REPO_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
+
+# Create and activate virtual environment if it doesn't exist.
+if [ ! -d "$REPO_ROOT/.venv" ]; then
+  echo "Creating virtual environment..."
+  python3 -m venv "$REPO_ROOT/.venv"
+fi
+
+# Activate the venv.
+source "$REPO_ROOT/.venv/bin/activate"
+
+# Install the package in editable mode if not already installed.
+if ! command -v cdx-index >/dev/null 2>&1; then
+  echo "Installing cdx-indexer..."
+  pip install -e "$REPO_ROOT"
+fi
+
+# Run cdx-index chat.
+echo "Starting chat..."
+cdx-index chat

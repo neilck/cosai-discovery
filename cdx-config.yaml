@@ -1,0 +1,41 @@
+# COSAI Discovery indexer configuration.
+# All paths are relative to this file's directory (the repo root).
+#
+# Resolution order (later wins):
+#   1. Built-in code defaults
+#   2. This file (cdx-config.yaml)
+#   3. Environment variables (CDX_MODEL, CDX_EMBED, VOYAGE_API_KEY, etc.)
+#   4. CLI flags (--model, --embed, --db-path, etc.)
+#
+# Secrets (API keys) belong in .env or environment variables, never here.
+
+workspace:
+  # Parent directory of all indexed projects (cosai-oasis/).
+  root: ..
+
+  # Where per-project index JSONL files are written.
+  indexes_dir: .cosai-indexes
+
+  # Write indexes alongside indexes_dir, not in-project .cosai-index/ dirs.
+  sidecar: true
+
+data:
+  # LangGraph checkpoint database. Build-time only; safe to delete.
+  checkpoints_db: .cdx/checkpoints.db
+
+  # Voyage vector store. Durable; delete only to force re-embed.
+  vectors_db: .cdx/vectors.db
+
+models:
+  # Claude model for Stage 1 (planner) and Stages 2a/2b/2c (per-entry summaries).
+  # Override via CDX_MODEL env var or --model CLI flag.
+  default: claude-haiku-4-5
+
+  # Stronger model for fallback / override cases.
+  # Override via CDX_MODEL_STRONG env var or --model strong CLI flag.
+  strong: claude-sonnet-4-6
+
+embed:
+  # Set to true to embed via Voyage after every build.
+  # Override via CDX_EMBED=1 env var or --embed CLI flag.
+  enabled: false
