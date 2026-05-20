@@ -29,7 +29,7 @@ Every project contains a `.cosai-index/` directory at its root with four files:
     manifest.json           # project-wide metadata
     packages.jsonl          # one line per installable package
     snippets.jsonl          # one line per copyable code pattern
-    references.jsonl        # one line per doc chunk or structured artifact
+    references.jsonl        # one line per document or structured artifact
 ```
 
 **The manifest** describes the project as a whole. The MCP server uses it for project-level discovery (`list_projects`) and filtering.
@@ -42,7 +42,7 @@ The three files answer three different agent questions:
 
 - **`packages.jsonl` — "Can I depend on this?"** Importable units the agent could install or run.
 - **`snippets.jsonl` — "Is there code I can copy?"** Notable patterns the agent could adapt.
-- **`references.jsonl` — "What context should I load?"** Doc chunks, rules, frameworks, structured items the agent should read.
+- **`references.jsonl` — "What context should I load?"** Documents, rules, frameworks, structured items the agent should read.
 
 Separate files mean the MCP server can scope a query to one of these intents cheaply. Filter values map directly to per-file behaviour; the three intents don't share search semantics.
 
@@ -56,7 +56,7 @@ Every field declares its purpose by how it's used:
 
 - **embed** — included in the embedding input; contributes to semantic match. Free text.
 - **filter** — used as a hard filter at the vector store. Enumerated strings or simple scalars.
-- **store** — reference data the model reads after retrieval. Not embedded, not filtered. Used for navigation (`path`, `lines`, IDs).
+- **store** — reference data the model reads after retrieval. Not embedded, not filtered. Used for navigation (`path`, IDs).
 
 When a value needs *both* semantic match and hard filterability — e.g. languages on a multi-language rule — split it: filter values go in `tags`, semantic context goes in `summary` or `structure_description`. The same source feeds both destinations.
 
@@ -267,7 +267,7 @@ Single value per entry — pick the consumption-facing answer (how does a downst
 |---|---|---|
 | `"package"` | Importable or installable unit. | `packages.jsonl` |
 | `"snippet"` | Notable code pattern. | `snippets.jsonl` |
-| `"reference"` | Doc chunk or structured artifact. | `references.jsonl` |
+| `"reference"` | Document or structured artifact. | `references.jsonl` |
 
 ## `snippets.jsonl`
 
@@ -293,7 +293,6 @@ A file is excluded if it carries `cosai-index: ignore` or sits under a test path
   "kind": "library | cli | service | claude-plugin | devcontainer-feature | other",
   "title": "<short title>",
   "path": "<rel-path>",
-  "lines": "<start>-<end>",
   "language": "<implementation language>",
   "summary": "<embedded prose>",
   "tags": ["..."],
@@ -311,7 +310,6 @@ A file is excluded if it carries `cosai-index: ignore` or sits under a test path
 | `kind` | filter | What kind of pattern this is (library, cli, service, etc.). Uses the same enum as manifest `primary_kind`. See [`kind` values](#kind-values). |
 | `title` | embed | Short. Names the pattern. |
 | `path` | store | Repo-relative path. |
-| `lines` | store | Range within the file, e.g. `"42-118"`. |
 | `language` | filter | The snippet's language. Single value — Rule 2. |
 | `summary` | embed | What the pattern does, when to use it. |
 | `tags` | filter | Free-form. |
@@ -320,22 +318,24 @@ A file is excluded if it carries `cosai-index: ignore` or sits under a test path
 
 ## `references.jsonl`
 
-One line per **doc chunk or structured content artifact**. This corpus carries everything read-for-context: README chunks, doc-site pages, whitepapers, rules, skills, prompts, checklists, individual YAML data items.
+One line per **document or structured content artifact**. This corpus carries everything read-for-context: READMEs, doc-site pages, whitepapers, rules, skills, prompts, checklists, individual YAML data items.
 
-The same knowledge can come in different forms — a whitepaper section and a structured rule may both teach safe deserialization. References distinguish them by **form**, not by category.
+The same knowledge can come in different forms — a whitepaper and a structured rule may both teach safe deserialization. References distinguish them by **form**, not by category.
+
+### What an entry describes
+
+An entry describes a **whole document** (or a single YAML item from a structured list). The indexer produces one entry per file the planner selected; it does not split markdown into per-heading entries. Chunking for vector retrieval is the importer's responsibility (see [Importer chunking](#importer-chunking)) — the indexer's job is to record *what files exist and what they're about*, not to slice them.
 
 ### Entry shape
 
 ```json
 {
-  "id": "ref:<project>/<doc>#<anchor>",
+  "id": "ref:<project>/<doc>",
   "category": "reference",
   "kind": "docs | whitepaper | working-group | ruleset | dataset | other",
-  "title": "<heading or artifact title>",
+  "title": "<document title>",
   "doc": "<rel-doc-path>",
-  "section_path": ["H1", "H2", "..."],
   "path": "<rel-doc-path>",
-  "lines": "<start>-<end>",
 
   "form": "prose | structured | mixed",
   "structure_description": "<embedded prose; describes the form>",
@@ -350,35 +350,38 @@ The same knowledge can come in different forms — a whitepaper section and a st
 
 | Field | Purpose | Notes |
 |---|---|---|
-| `id` | store | `ref:<project>/<doc>#<anchor>`. |
+| `id` | store | `ref:<project>/<doc>`, where `<doc>` is a path-derived slug. For decomposed YAML items, append the item id: `ref:secure-ai-tooling/risks/riskDataPoisoning`. |
 | `category` | filter | Always `"reference"`. Shared across all JSONL files; see [`category` values](#category-values). |
 | `kind` | filter | What kind of reference this is (docs, whitepaper, ruleset, etc.). Subset of manifest `primary_kind`. See [`kind` values](#kind-values). |
-| `title` | embed | Heading text or artifact title. |
+| `title` | embed | Document title — usually the first H1 heading or, failing that, a human-readable form of the filename. |
 | `doc` | store | Source document path. |
-| `section_path` | store | Heading breadcrumb, e.g. `["Architecture", "Indexing", "Embeddings"]`. |
 | `path` | store | Repo-relative path, usually same as `doc`. |
-| `lines` | store | Line range within `doc`. |
 | `form` | filter | See [`form` values](#form-values). |
-| `structure_description` | embed | Short prose describing the form. Empty / omitted for `form: "prose"`. See [structured content](#structured-content). |
-| `summary` | embed | 1–3 sentences. The content's meaning. |
-| `tags` | filter | Free-form. |
+| `structure_description` | embed | Short prose describing how the document is organized. Empty / omitted for `form: "prose"`. See [structured content](#structured-content). |
+| `summary` | embed | 1–3 sentences. What the document is about and when an agent would want to read it. |
+| `tags` | filter | Free-form. Frontmatter values are lifted into `tags` (see [structured content](#structured-content)). |
 | `content_hash` | store | SHA-256 of inputs producing `summary` and `structure_description`. |
 
 #### `form` values
 
 | Value | Meaning |
 |---|---|
-| `prose` | Flowing text — whitepapers, README sections, blog posts. |
+| `prose` | Flowing text — whitepapers, READMEs, blog posts. |
 | `structured` | Schema'd content with directives, bullets, or frontmatter — rules, checklists, controls, prompts, skill bundles, individual YAML data items. |
 | `mixed` | Prose with embedded structured fragments. |
 
-### Chunking rules
+### Decomposition rules
 
-- **Markdown documents are chunked per heading.** Default H2 boundaries; sub-split on H3/H4 when a section exceeds ~1500 tokens.
-- **Minimum chunk size ~200 characters.** Tiny stub sections collapse into their parent.
+- **One entry per file the planner selected.** The indexer does not chunk markdown into per-heading entries.
 - **Structured data files (YAML lists of items) decompose into one entry per item.** A `risks.yaml` with 28 items produces 28 reference entries — one per item, not one per file. The item's `id` field becomes part of the entry's `id` (e.g. `ref:secure-ai-tooling/risks/riskDataPoisoning`).
 - **When markdown and PDF copies of the same document exist, index the markdown only.** Detected by adjacent files sharing a basename.
 - **READMEs and docs-site sources coexist.** Both are indexed when present; ranking handles overlap.
+
+### Importer chunking
+
+When the importer loads a reference entry into the vector store, it reads the file at `path` and applies whatever chunking strategy suits the embedding model — typically heading-based splits with a token budget. The resulting per-chunk vectors carry the entry's `id` so retrieval can return either the chunk or the whole document via `get_entry(include: "full_document")`.
+
+The indexer does not specify chunking rules. The importer owns that decision because chunking depends on the embedding model's context window and tokenizer, neither of which the index file should bake in.
 
 ### Structured content
 

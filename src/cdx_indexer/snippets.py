@@ -55,7 +55,6 @@ class SnippetFacts:
     slug: str  # used in the id and as a fallback title
     path: str
     language: str
-    lines: str  # e.g. "1-118"
     depends_on: list[str]
     content_hash: str
     # For LLM context:
@@ -75,9 +74,6 @@ def gather_snippet_facts(plan_entry: EntryPlanSnippet, scan: ProjectScan, projec
     except OSError:
         return None
 
-    line_count = content.count("\n") + 1
-    lines = f"1-{line_count}"
-
     language = (plan_entry.language or "").lower()
     depends_on = _extract_depends_on(content, language, file_path, project_path)
 
@@ -93,7 +89,6 @@ def gather_snippet_facts(plan_entry: EntryPlanSnippet, scan: ProjectScan, projec
     hash_inputs = {
         "path": plan_entry.path,
         "language": language,
-        "lines": lines,
         # Hash the content too so re-runs after edits get fresh summaries.
         "content_len": len(content),
         "content_head": content[:1024],
@@ -107,7 +102,6 @@ def gather_snippet_facts(plan_entry: EntryPlanSnippet, scan: ProjectScan, projec
         slug=slug,
         path=plan_entry.path,
         language=plan_entry.language,
-        lines=lines,
         depends_on=depends_on,
         content_hash=content_hash,
         content_excerpt=excerpt,
@@ -197,7 +191,6 @@ def _build_user_prompt(facts: SnippetFacts) -> str:
     context = {
         "path": facts.path,
         "language": facts.language,
-        "lines": facts.lines,
         "depends_on": facts.depends_on,
         "content": facts.content_excerpt,
     }
@@ -290,7 +283,6 @@ def _build_graph(model: str, checkpointer: SqliteSaver):
             kind="library",  # placeholder — revisit after seeing real output
             title=parsed.get("title", "") or facts.slug,
             path=facts.path,
-            lines=facts.lines,
             language=facts.language,
             summary=parsed.get("summary", ""),
             tags=parsed.get("tags", []) or [],

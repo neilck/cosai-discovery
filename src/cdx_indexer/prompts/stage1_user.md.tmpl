@@ -76,10 +76,12 @@ Which files Stages 2a/2b/2c should process. Each list is empty by default; only 
   - Files under `examples/`, `cookbook/`, `recipes/`, `practical-guides/examples/` are strong candidates **when they contain code**.
 
 - **references**: array of `{path, form, reason}`.
-  - Each markdown document worth chunking into reference entries.
+  - Each document worth indexing as reference material. One entry per file — the indexer does NOT chunk by heading (chunking happens later at embedding time).
+  - **Include markdown documents** worth reading for context: READMEs, guides, rule files, skill bundles, charters, workstream docs, whitepapers. Include the README. Include other root-level documents that have real content (`CHARTER`, `WORKSTREAMS`, etc. when present).
+  - **Include YAML structured-data files** when they hold a list of items each having an `id` field (e.g. `risk-map/yaml/risks.yaml`, `controls.yaml`, `personas.yaml`). The indexer decomposes each item into its own reference entry, so a `risks.yaml` with 28 items produces 28 entries. The list can be at the top level or nested under a single key (e.g. `{risks: [...]}`). Use `form: "structured"` for these.
+  - Skip YAML files that hold only configuration or styling (`mermaid-styles.yaml`, `lifecycle-stage.yaml` if it's a flat enum, etc.) — those aren't reference content.
   - `form`: ONE of: `prose | structured | mixed`
   - Skip files baselined out by the indexer (`LICENSE`, `CODE-OF-CONDUCT`, `CONTRIBUTING`). Skip PDFs (the indexer ignores them when adjacent `.md` exists).
-  - Include the README. Include other root-level documents that have real content (`CHARTER`, `WORKSTREAMS`, etc. when present).
 
 ## Guidance on unreliable inputs
 

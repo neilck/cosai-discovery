@@ -13,7 +13,7 @@ from dataclasses import asdict, dataclass, is_dataclass
 from pathlib import Path
 from typing import Any
 
-from .types import Manifest, Package, Snippet
+from .types import Manifest, Package, Reference, Snippet
 
 
 @dataclass
@@ -104,6 +104,11 @@ def write_packages_jsonl(output_dir: Path, packages: list[Package]) -> Path:
 def write_snippets_jsonl(output_dir: Path, snippets: list[Snippet]) -> Path:
     """Atomically write snippets.jsonl from a list of Snippet entries."""
     return _write_jsonl_atomic(output_dir / "snippets.jsonl", [s.to_dict() for s in snippets])
+
+
+def write_references_jsonl(output_dir: Path, references: list[Reference]) -> Path:
+    """Atomically write references.jsonl from a list of Reference entries."""
+    return _write_jsonl_atomic(output_dir / "references.jsonl", [r.to_dict() for r in references])
 
 
 def _write_jsonl_atomic(target: Path, rows: list[dict]) -> Path:

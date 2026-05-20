@@ -19,7 +19,6 @@ class Snippet:
     kind: str = "library"
     title: str = ""
     path: str = ""
-    lines: str = ""
     language: str = ""
     summary: str = ""
     tags: list[str] = field(default_factory=list)
@@ -33,13 +32,46 @@ class Snippet:
             "kind": self.kind,
             "title": self.title,
             "path": self.path,
-            "lines": self.lines,
             "language": self.language,
             "summary": self.summary,
             "tags": list(self.tags),
             "depends_on": list(self.depends_on),
             "content_hash": self.content_hash,
         }
+        return out
+
+
+@dataclass
+class Reference:
+    """Reference entry in references.jsonl."""
+
+    id: str
+    category: str = "reference"
+    kind: str = "docs"
+    title: str = ""
+    doc: str = ""
+    path: str = ""
+    form: str = ""
+    summary: str = ""
+    tags: list[str] = field(default_factory=list)
+    content_hash: str = ""
+    structure_description: str | None = None
+
+    def to_dict(self) -> dict[str, Any]:
+        out: dict[str, Any] = {
+            "id": self.id,
+            "category": self.category,
+            "kind": self.kind,
+            "title": self.title,
+            "doc": self.doc,
+            "path": self.path,
+            "form": self.form,
+            "summary": self.summary,
+            "tags": list(self.tags),
+            "content_hash": self.content_hash,
+        }
+        if self.structure_description:
+            out["structure_description"] = self.structure_description
         return out
 
 
