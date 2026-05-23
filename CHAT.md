@@ -20,15 +20,23 @@ cdx-index chat project-codeguard secure-ai-tooling
 
 ## How It Works
 
-1. **Vector Search** — When you ask a question, the app embeds it using Voyage AI (`voyage-3` model).
+1. **Static System Prompt** — Claude is given a system prompt with:
+   - Overview of all indexed projects (name, description, tags)
+   - Instructions on how to use the `search_projects` tool with optional filters
 
-2. **Semantic Similarity** — Searches the vector store (SQLite + sqlite-vec) to find the 5 most semantically similar indexed entries.
+2. **Tool-Use Search** — When Claude needs information, it calls the `search_projects` tool with:
+   - `query` — semantic search string
+   - `project` (optional) — filter to one project
+   - `kind` (optional) — filter to package | snippet | reference | manifest
+   - `limit` (optional) — number of results (default 5, max 10)
 
-3. **Context Window** — The matching entries are formatted and passed to Claude as context.
+3. **Semantic Search** — The tool embeds the query using Voyage AI (`voyage-3` model) and finds nearest neighbors in the vector store (SQLite + sqlite-vec).
 
-4. **Response** — Claude generates an answer based on the indexed data.
+4. **Metadata Retrieval** — Matching entry metadata (title, summary, path, tags) is fetched directly from the database.
 
-5. **Multi-turn Conversation** — Conversation history is maintained for follow-up questions.
+5. **Claude Response** — Claude sees the search results and generates an answer, or calls `search_projects` again with refined parameters.
+
+6. **Multi-turn Conversation** — Conversation history and tool calls are maintained for follow-up questions and search refinement.
 
 ## Examples
 
@@ -47,13 +55,15 @@ Assistant: [Claude digs into related risk entries from ws3-ai-risk-governance]
 
 ### Components
 
-- **VectorSearcher** (`chat.py:VectorSearcher`) — Opens vector store, queries embeddings, fetches entry metadata from JSONL files.
-- **chat_loop** (`chat.py:chat_loop`) — Interactive loop that:
-  1. Embeds user query via Voyage
-  2. Searches vector store for nearest neighbors
-  3. Formats results as context for Claude
-  4. Calls Claude with system prompt + context + conversation history
-  5. Displays response and saves to history
+- **VectorSearcher** (`chat.py:VectorSearcher`) — Opens vector store, handles semantic search, fetches entry metadata from database.
+- **_build_system_prompt()** (`chat.py`) — Builds static system prompt with project summaries loaded from manifest entries in the DB.
+- **SEARCH_TOOL** (`chat.py`) — Tool definition for Claude to call with query, optional project/kind filters, and limit.
+- **chat_loop** (`chat.py:chat_loop`) — Agentic loop that:
+  1. Sends user message + conversation history to Claude with tool definition
+  2. If Claude calls `search_projects`, executes the search and returns results
+  3. If Claude calls the tool again (refinement), executes again
+  4. Returns response when `stop_reason != "tool_use"`
+  5. Maintains conversation history for multi-turn context
 - **CLI Integration** (`cli.py:chat`) — Entry point wired to main CLI.
 
 ### Data Flow
@@ -61,19 +71,23 @@ Assistant: [Claude digs into related risk entries from ws3-ai-risk-governance]
 ```
 User Question
     ↓
+Claude sees system prompt (project summaries) + tool definition
+    ↓
+Claude calls search_projects(query, project?, kind?, limit?)
+    ↓
 Voyage Embedding (query_vector)
     ↓
-VectorStore.search(query_vector, k=5)
+VectorStore.search(query_vector, k=limit, project=..., kind=...)
     ↓
-[SearchHit, SearchHit, SearchHit, ...]  (distances from sqlite-vec KNN)
+[SearchHit, SearchHit, ...] from sqlite-vec KNN
     ↓
-Load entry metadata from JSONL (fallback to entries table)
+Load entry metadata from entries table (title, summary, path, tags)
     ↓
-Format as context string
+Format results as context
     ↓
-Claude API call with system prompt + context + conversation history
+Claude sees results, may refine and call search_projects again
     ↓
-Response → Display & save to history
+Claude generates final response → Display & save to history
 ```
 
 ### Vector Store Schema

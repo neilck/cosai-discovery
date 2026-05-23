@@ -15,7 +15,7 @@ import json
 import os
 import sys
 import time
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Iterable
 
@@ -181,6 +181,10 @@ class CorpusEntry:
     content_hash: str
     model: str  # voyage-3 | voyage-code-3
     embedded_text: str  # what we'll send to Voyage
+    title: str = ""
+    summary: str = ""
+    path: str = ""
+    tags: list[str] = field(default_factory=list)
 
 
 @dataclass
@@ -297,6 +301,10 @@ def embed_index_files(
                     model=entry.model,
                     embedded_text=entry.embedded_text,
                     vector=vector,
+                    title=entry.title,
+                    summary=entry.summary,
+                    path=entry.path,
+                    tags=entry.tags,
                 )
             summary.embedded += len(entries)
             summary.tokens += result.total_tokens
@@ -353,6 +361,10 @@ def _load_desired_entries(
                 content_hash=ch,
                 model=MODEL_PROSE,
                 embedded_text=description,
+                title="",
+                summary=description,
+                path="manifest.json",
+                tags=manifest.get("tags", []),
             )
 
     pkg_path = index_dir / "packages.jsonl"
@@ -368,6 +380,10 @@ def _load_desired_entries(
                 content_hash=row["content_hash"],
                 model=MODEL_CODE,
                 embedded_text=text,
+                title=row.get("name", ""),
+                summary=row.get("summary", ""),
+                path=row.get("path", ""),
+                tags=row.get("tags", []),
             )
 
     snip_path = index_dir / "snippets.jsonl"
@@ -383,6 +399,10 @@ def _load_desired_entries(
                 content_hash=row["content_hash"],
                 model=MODEL_CODE,
                 embedded_text=text,
+                title=row.get("title", ""),
+                summary=row.get("summary", ""),
+                path=row.get("path", ""),
+                tags=row.get("tags", []),
             )
 
     ref_path = index_dir / "references.jsonl"
@@ -400,6 +420,10 @@ def _load_desired_entries(
                 content_hash=row["content_hash"],
                 model=MODEL_PROSE,
                 embedded_text=text,
+                title=row.get("title", ""),
+                summary=row.get("summary", ""),
+                path=row.get("path", ""),
+                tags=row.get("tags", []),
             )
 
 

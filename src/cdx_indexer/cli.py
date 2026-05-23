@@ -393,7 +393,7 @@ def chat(ctx: click.Context, projects: tuple[str, ...]):
     project_list = list(projects) if projects else None
 
     try:
-        with VectorSearcher(cfg.vectors_db, cfg.indexes_dir, project_slugs=project_list) as searcher:
+        with VectorSearcher(cfg.vectors_db, project_slugs=project_list) as searcher:
             chat_loop(searcher)
     except Exception as exc:  # noqa: BLE001
         raise click.ClickException(str(exc)) from exc

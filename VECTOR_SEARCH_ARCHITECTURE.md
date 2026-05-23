@@ -29,30 +29,34 @@ class IndexSearcher:
 - Slow with many entries (O(n) per query)
 - Can't distinguish between "secure" and "security" even though they're related
 
-### After: Vector Search
+### After: Vector Search with Tool-Use
 
 ```python
 class VectorSearcher:
-    def __init__(self, db_path):
-        # Open SQLite connection to pre-computed vectors
+    def __init__(self, db_path, project_slugs=None):
+        # Open SQLite connection to pre-computed vectors + metadata
         self.store = VectorStore.open(db_path)
+        self.project_slugs = project_slugs or self.store.list_projects()
         # No entries in memory; just a DB connection
     
-    def search(self, query):
+    def search(self, query, limit=5, project=None, kind=None):
         # Embed query
         query_vector = voyage_client.embed(query)
         
-        # KNN search: O(log n) with sqlite-vec
-        hits = self.store.search(query_vector, k=5)
+        # KNN search with optional project/kind filters
+        hits = self.store.search(query_vector, k=limit, project=project, kind=kind)
         
-        # Lazy load metadata for top 5 only
-        return [fetch_metadata(hit) for hit in hits]
+        # Lazy load metadata from database (not JSONL)
+        # title, summary, path, tags all in entries table
+        return [self.store.get_entry_metadata(hit.project, hit.kind, hit.entry_id) for hit in hits]
 ```
 
 **Advantages:**
 - No memory overhead (just DB connection)
 - Semantic understanding (embeddings capture meaning)
 - Fast KNN via sqlite-vec indexing
+- Metadata stored in DB, no JSONL file I/O
+- Claude can filter by project/kind via tool parameters
 - "Secure" and "security" map to nearby vectors
 
 ---
@@ -81,25 +85,36 @@ When you run `cdx-index build --embed`:
    }
    ```
 4. **Get vectors** — Receive 1024-dim float vectors
-5. **Store in SQLite**:
+5. **Store in SQLite with metadata**:
    ```sql
    INSERT INTO entries VALUES (
      project='project-codeguard',
      kind='reference',
      entry_id='ref:README',
-     embedded_text='{...json...}',
-     content_hash='sha256:...'
+     embedded_text='...',
+     content_hash='sha256:...',
+     title='Project CodeGuard: Security Skills...',
+     summary='Foundational README...',
+     path='README.md',
+     tags='["ai-coding-agents", "secure-by-default", ...]'
    )
    INSERT INTO vec_entries VALUES (embedding=<1024 floats>)
    INSERT INTO entry_vec VALUES (rowid=123)
    ```
 
-**Result:** `.cdx/vectors.db` now contains 300 entries with 1024-dim embeddings.
+**Result:** `.cdx/vectors.db` now contains 300 entries with:
+- 1024-dim embeddings indexed for KNN
+- Rich metadata (title, summary, path, tags) stored for retrieval
 
-### Step 2: User Asks a Question
+### Step 2: Claude Calls the Tool
 
 ```
 User: "What security rules does CodeGuard have?"
+    ↓
+Claude sees system prompt with projects + tool definition
+    ↓
+Claude calls: search_projects(query="security rules CodeGuard", project=None, kind=None, limit=5)
+    ↓
 ```
 
 ### Step 3: Embed the Query
@@ -149,29 +164,34 @@ SearchHit(
 )
 ```
 
-### Step 5: Load Entry Metadata
+### Step 5: Load Entry Metadata from Database
 
-For each top hit, fetch the full entry:
+For each top hit, fetch metadata from the database:
 
 ```python
-def _get_entry_metadata(self, project, kind, entry_id):
-    # Option 1: Fast path - fetch from entries table
+def get_entry_metadata(self, project, kind, entry_id):
+    # Fetch from entries table (fast)
     cur = store._conn.execute(
-        "SELECT embedded_text FROM entries WHERE ...",
+        "SELECT title, summary, path, tags FROM entries WHERE project = ? AND kind = ? AND entry_id = ?",
         (project, kind, entry_id)
     )
-    metadata = json.loads(row[0])  # embedded_text is JSON
-    return metadata
-
-    # Option 2: Fallback - read from JSONL
-    # Only if embedded_text not available (shouldn't happen)
+    row = cur.fetchone()
+    if row:
+        title, summary, path, tags_json = row
+        return {
+            "title": title or "",
+            "summary": summary or "",
+            "path": path or "",
+            "tags": json.loads(tags_json) if tags_json else [],
+        }
 ```
 
-**Why two approaches?**
-- **entries table**: Pre-computed during embedding phase, instant fetch
-- **JSONL fallback**: For entries in JSONL but not yet embedded, or if DB is corrupted
+**Why the database?**
+- **Fast**: Direct SQL query, indexed columns
+- **No JSONL I/O**: All metadata stored in the DB at embed time
+- **Consistent**: Single source of truth (DB, not JSONL files)
 
-### Step 6: Format for Claude
+### Step 6: Format Results for Claude
 
 ```python
 # Convert search results to readable context string
@@ -181,54 +201,39 @@ def format_results(self, results):
         output += f"[{i}] {result['title']}\n"
         output += f"    Project: {result['project']}\n"
         output += f"    Type: {result['kind']}\n"
-        output += f"    Relevance: {1 - result['distance']:.2%}\n"
+        distance = result['distance']
+        relevance_score = max(0, 1 - distance)  # Clamp to [0, 1]
+        output += f"    Match: {relevance_score:.2%}\n"
         output += f"    Summary: {result['summary']}\n"
+        if result.get('path'):
+            output += f"    Path: {result['path']}\n"
         output += "\n"
     return output
 ```
+
+### Step 7: Claude Generates Response
+
+Claude sees the formatted results and generates an answer. Claude can also:
+- Call `search_projects` again with refined filters (project=..., kind=...)
+- Ask follow-up searches to gather more context
+- Continue the multi-turn conversation with proper history
 
 **Example output:**
 ```
 [1] Software Security Skill
     Project: project-codeguard
     Type: reference
-    Relevance: 89%
+    Match: 89%
     Summary: Defines 3 always-apply rules and context-triggered rules...
+    Path: docs/rules/software-security-skill.md
 
 [2] Claude Code Plugin
     Project: project-codeguard
     Type: reference
-    Relevance: 87%
+    Match: 87%
     Summary: Integration of 23 CodeGuard security rules as Claude tools...
+    Path: docs/claude-code-skill-plugin.md
 ```
-
-### Step 7: Call Claude with Context
-
-```python
-system_prompt = f"""You are a helpful assistant answering about CoSAI.
-
-INDEXED PROJECTS: project-codeguard, secure-ai-tooling
-
-RELEVANT ENTRIES (found via semantic vector search):
-{formatted_results}
-
-If the question cannot be answered from these entries, say so."""
-
-response = client.messages.create(
-    model="claude-opus-4-7",
-    system=system_prompt,
-    messages=[
-        {"role": "user", "content": query},
-        ...previous messages...
-    ]
-)
-```
-
-Claude sees:
-- The system prompt (instructions + search results)
-- The user's question
-- Previous conversation messages
-- Can generate a response based on the retrieved context
 
 ---
 

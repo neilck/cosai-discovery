@@ -351,3 +351,424 @@ A few principles have emerged from the way this project is being run. Capture th
 9. **Schema discipline: candidate fields stay deferred unless a real query demands them.** When walking a project, it is tempting to add a field every time the project's shape *could* use one. Resist. A field is justified only when a concrete user query — phrased in the user's voice, not the schema's — would fail or degrade without it. Project-shape alone is not evidence; user-query is.
 10. **Project evaluation is anchored in realistic user prompts.** Each project walk includes running a fixed list of representative prompts (across all four original user goals) against what the index *would* return for that project. This grounds the analysis in retrieval reality rather than schema aesthetics, and surfaces queries the schema can already serve from those it cannot.
 11. **Reversible local actions are free; commits/pushes/deletes are not.** No tooling has been built yet, so this principle is mostly a placeholder for the implementation phase.
+
+---
+
+## Phase 9 — Shift from spec to implementation
+
+### Situation
+After eight phases of spec-driven design and walking 8 of 11 projects, the index format and MCP tool surface were stable enough to begin implementation. The user pivoted: instead of completing all 11 project walks, focus on building a working prototype of the indexer CLI and chat interface. This would validate the spec *through code* rather than continuing pure design work, and produce a concrete artifact the user could iterate with.
+
+### Task
+Build a working CLI indexer (`cdx-index`) that:
+1. Ingests real project data (scans, manifests, packages, snippets, references)
+2. Orchestrates multi-stage LLM processing (planning, summarization, embedding)
+3. Produces index files matching v0.0.4 spec
+4. Stores embeddings in a local vector database
+5. Supports a chat interface to query the indexed data
+
+This required collapsing the MCP server scope back to a simpler prototype: a local CLI + chat app instead of a network service, with the MCP server deferred to a future phase.
+
+### Action
+Implemented in four sub-phases:
+
+#### Phase 9a — Configuration system and project scaffold
+- Created `config.py` with `CdxConfig` class to load `cdx-config.yaml`
+- Implemented config auto-discovery (walk up from cwd looking for config file)
+- Established resolution order: code defaults → YAML → env vars → CLI flags
+- Consolidated runtime data to `.cdx/` directory (checkpoints, vectors)
+- Created CLI group with `--config` option that passes to all commands
+
+#### Phase 9b — Indexing pipeline (Stages 0–2c)
+- **Stage 0 (scan.py)**: Walk project, collect file tree, manifests, README, git metadata
+- **Stage 1 (planner.py)**: LLM classification + entry plan via LangGraph, with checkpointing
+- **Stage 2a (packages.py)**: Per-package summarization via LLM
+- **Stage 2b (snippets.py)**: Per-snippet summarization via LLM
+- **Stage 2c (references.py)**: Per-reference summarization + YAML decomposition via LLM
+- **Writers (writer.py)**: Atomic JSONL/JSON writers, sidecar path resolution
+- Implemented hash-diff caching: `cdx-index build` is incremental; re-running with no changes skips LLM calls
+
+#### Phase 9c — Vector store and embedding (Stage 3)
+- Created `vectorstore.py`: SQLite wrapper with sqlite-vec for KNN
+- Implemented `embed.py`: Batch Voyage embeddings with hash-diff and retry logic
+- Added `cdx-index build --embed` flag to trigger embedding after indexing
+- Schema: entries (metadata) + vec_entries (1024-dim vectors) + entry_vec (bridge)
+- Incremental embedding: reuses hashes, skips unchanged entries, deletes stale vectors
+
+#### Phase 9d — CLI commands and management
+- `cdx-index build [PROJECT]` — Full pipeline with `--embed` option
+- `cdx-index status` — Show per-project index + vector counts, in/out-of-sync check
+- `cdx-index drop PROJECT` — Delete vectors for one project (files untouched)
+- `cdx-index reset [PROJECT] [--all]` — Delete LangGraph checkpoints (forces fresh LLM)
+- `cdx-index purge [PROJECT] [--all]` — Delete index JSONL files from disk
+- All commands support `--dry-run` to preview changes without executing
+
+All commands read configuration from `cdx-config.yaml` (paths, models, embedding settings).
+
+### Result
+A working CLI indexer that:
+- Processes all 10 indexed projects end-to-end (500+ entries across project-codeguard and secure-ai-tooling tested)
+- Produces JSONL files matching v0.0.4 spec
+- Stores 200+ embeddings in `.cdx/vectors.db` via Voyage
+- Supports incremental re-runs (second build is a no-op if nothing changed)
+- Provides clear status output showing what's indexed, what's embedded, what's out-of-sync
+- Simplifies scripts: removed hand-rolled bash logic, replaced with CLI commands
+
+The pipeline works end-to-end. The implementation revealed no schema violations or missing affordances — the spec held up well against real execution.
+
+---
+
+## Phase 10 — Terminal chat with keyword search
+
+### Situation
+With the indexer working, the next question was: how do we *use* the indexes? The original MCP server design was a network service for other Claude instances. But the user wanted something immediate: an interactive terminal chat where they could ask questions about the indexed projects and get answers.
+
+### Task
+Build a simple chat app that:
+1. Loads indexed projects (JSONL files)
+2. Performs keyword search on user queries
+3. Passes top results to Claude as context
+4. Returns Claude's response
+5. Maintains conversation history for follow-ups
+
+This would validate the index structure and content quality before building the more complex MCP server.
+
+### Action
+Implemented `chat.py` with two classes:
+
+1. **IndexSearcher** — loads all JSONL files into memory, provides simple keyword search
+   - Linear scan of entries: score by term frequency
+   - Returns top-5 results sorted by relevance score
+   - Fast enough for 300 entries
+
+2. **chat_loop()** — interactive terminal chat
+   - Read user input → search → format → Claude → response → save history
+   - Multi-turn conversation maintained in memory
+   - Voyage API keys loaded from `.env` automatically
+
+Integration: `cdx-index chat [PROJECT...]` entry point that:
+- Uses config to find indexes
+- Opens IndexSearcher for one or multiple projects
+- Enters chat loop
+
+### Result
+A working chat interface that:
+- Searches across indexed projects
+- Returns relevant entries from the index
+- Passes them to Claude as context
+- Provides conversational interface for exploring the workspace
+- Works with or without specifying projects (searches all if none specified)
+
+**Revealed limitations of keyword search:**
+- No semantic understanding ("secure" ≠ "safety")
+- Misses conceptually related entries
+- Relies on exact word matches
+
+---
+
+## Phase 11 — Migrate to vector search
+
+### Situation
+After using the keyword-search chat, a limitation became clear: semantic queries often failed. User asking "Tell me about protecting privacy information" would get tangentially related results (data handling, input validation) but nothing specifically about privacy. The keyword search was too rigid — it needed semantic understanding.
+
+The indexer already had embeddings in the vector database. The question: can we switch the chat from loading all JSONL into memory to querying the vector store instead?
+
+### Task
+Refactor the chat to use vector search:
+1. Replace IndexSearcher (loads all entries) with VectorSearcher (queries vector DB)
+2. Keep the chat loop and Claude integration identical
+3. Maintain lazy-loading of metadata (only fetch top-5 results, not 1000)
+4. Use Voyage to embed user queries, sqlite-vec for KNN search
+
+### Action
+Implemented `VectorSearcher` class with three core methods:
+
+1. **search(query)** — semantic search
+   - Embed query via Voyage API (`input_type="query"`)
+   - KNN search in sqlite-vec (find 5 nearest neighbors)
+   - Lazy-load metadata for top 5 from DB (entries table)
+   - Fall back to JSONL if entry not in table
+
+2. **_get_entry_metadata(project, kind, entry_id)** — fast metadata fetch
+   - Primary: query entries table for `embedded_text` (stored during indexing)
+   - Fallback: re-read from JSONL if needed
+   - Avoids re-reading all JSONL per query
+
+3. **format_results(results)** — convert search hits to Claude context
+   - Shows title, project, kind, relevance score, summary, path
+
+Integrated with chat_loop:
+- Same interface as keyword search (user types question, gets response)
+- Different backend (vector DB instead of in-memory JSONL)
+- Same multi-turn conversation history
+
+### Result
+Vector search chat that:
+- Understands semantic queries ("What security rules exist?" finds entries about protection)
+- Handles synonyms and paraphrasing ("secure code" matches "safety practices")
+- Scales better (O(log n) with KNN vs O(n) with linear scan)
+- Uses minimal memory (just DB connection, not all entries)
+- Requires pre-built embeddings (from `cdx-index build --embed`)
+
+**Performance:**
+- Query embedding: ~500ms (Voyage API call)
+- KNN search: ~50ms (sqlite-vec)
+- Metadata fetch: <10ms (DB query)
+- Claude response: ~2-3s
+- Total per query: ~3s
+
+**Discovered limitation:** Vector search returns approximate results. If a query's embedding isn't close to any indexed vectors, top-5 results may not be relevant. Claude handles this honestly — admitting "I don't have strong matches for that query" rather than forcing irrelevant results.
+
+---
+
+## Phase 12 — Document the architecture
+
+### Situation
+After implementing both keyword and vector search, the architecture was clear but not documented. The user had a detailed understanding from building it, but future readers (including the user in a later session) would need written explanation of:
+1. How vector search works step-by-step
+2. Why we moved from keyword to vector
+3. The data flow from query to response
+4. Design decisions and trade-offs
+
+### Task
+Create three documentation artifacts:
+1. **CHAT.md** — User guide for the chat app (quick start, usage examples, troubleshooting)
+2. **VECTOR_SEARCH_ARCHITECTURE.md** — Deep dive into how vector search works, with step-by-step walkthrough
+3. **VECTOR_SEARCH_GUIDE.md** — Implementation guide: how to build vector search from scratch, with code examples
+
+### Action
+Wrote comprehensive documentation:
+
+- **CHAT.md**: Quick-start guide, performance comparison (keyword vs vector), API requirements, common issues
+- **VECTOR_SEARCH_ARCHITECTURE.md**: How vectors are created during indexing, how queries are embedded, how KNN works, why Claude is the quality gate, implementation details, troubleshooting
+- **VECTOR_SEARCH_GUIDE.md**: Step-by-step guide to implementing VectorSearcher, design decisions explained, data flow diagrams, testing examples
+
+Also updated earlier docs:
+- **IMPLEMENTATION_SUMMARY.md** — Full summary of refactoring + chat app phases
+- **README.md** — Index format documentation (already existed from Phase 1)
+
+### Result
+Clear documentation of:
+- How to use the chat app
+- How vector search works internally
+- Why architectural choices were made
+- Step-by-step guide to implementing similar systems
+- Performance characteristics and limitations
+
+---
+
+## Phase 13 — Refactoring & optimization
+
+### Situation
+With the indexer and vector-search chat working end-to-end, attention shifted to code quality and operational concerns:
+1. Configuration was scattered across CLI flags, env vars, defaults
+2. Database files lived in three different locations (`.data/`, `.cosai-indexes/.data/`, new `.cdx/`)
+3. Checkpoint and index management required hand-rolled bash scripts
+4. The refactoring would also consolidate the work done in Phases 9–12
+
+### Task
+Clean up the implementation by:
+1. Centralizing configuration in `cdx-config.yaml`
+2. Consolidating database files to `.cdx/`
+3. Implementing CLI commands for checkpoint/index management
+4. Removing obsolete bash scripts
+5. Updating documentation to reflect the new structure
+
+### Action
+Five concrete changes:
+
+1. **Config system** (Phase 9a formalized)
+   - `cdx-config.yaml` as single source of truth for paths, models, embedding settings
+   - Auto-discovery walks up from cwd looking for config file
+   - Resolution order: defaults → YAML → env vars → CLI flags
+
+2. **Database consolidation**
+   - Moved `.data/checkpoints.db` → `.cdx/checkpoints.db`
+   - Moved `.cosai-indexes/.data/index.db` → `.cdx/vectors.db`
+   - Updated all references; old directories cleaned up
+
+3. **New CLI commands**
+   - `cdx-index reset [PROJECT]` — Delete checkpoints (forces fresh LLM calls)
+   - `cdx-index reset --all` — Wipe all checkpoints
+   - `cdx-index purge [PROJECT]` — Delete index JSONL files
+   - `cdx-index purge --all` — Delete all indices
+   - All support `--dry-run` flag
+
+4. **Simplified scripts**
+   - Removed `clear-checkpoints.sh` and `clear-indexes.sh` (now CLI commands)
+   - Updated `test-build.sh` to remove hardcoded `--sidecar` and `--workspace-root` (now config-driven)
+   - Added `test-chat.sh` for testing chat with predefined queries
+   - Updated `_scripts/README.md` with new workflows
+
+5. **Enhanced status command**
+   - Added `chk` (checkpoint count) column to status output
+   - Shows per-project checkpoint rows alongside vector counts
+   - Helps understand cache state at a glance
+
+### Result
+A cleaner implementation:
+- Single source of truth for configuration
+- Consolidated database location (`.cdx/`)
+- CLI commands replace bash scripts
+- Status command shows complete cache picture
+- Simpler scripts (thin wrappers, not business logic)
+
+---
+
+## Phase 14 — One-shot vs multi-step chat design
+
+### Situation
+After building the vector search chat and documenting it, a design question surfaced: does Claude iterate on search results, or does the user control all search refinement?
+
+Testing revealed the current implementation is **one-shot per query**: each user question triggers a fresh vector search, Claude sees those results in the system prompt, and generates a response. But Claude cannot request a new search or refine the original query. If the search misses something, the user has to rephrase their question and try again.
+
+The user asked: is this a limitation or a design choice? When would multi-step (Claude iterating on search) be better?
+
+### Task
+Analyze the one-shot architecture:
+1. What does it mean in concrete terms?
+2. What are its limitations?
+3. When does it break down?
+4. Could we build multi-step search, and should we?
+
+### Action
+Detailed conversation exploring:
+
+1. **One-shot flow diagram** showing query → search → format → Claude → response
+2. **Concrete examples** of where one-shot works well ("What are the main projects?") and where it struggles ("What whitepapers exist?" → no results found)
+3. **Why Claude is the quality gate**: vector search returns approximate results; Claude evaluates whether they answer the question
+4. **When one-shot breaks down**: queries that don't find semantic matches, or where top-5 results are all tangentially related
+5. **Multi-step alternative**: Claude could suggest search refinements, app auto-runs new search, Claude responds with new results (but this adds complexity, cost, and latency)
+6. **Trade-off analysis**: one-shot is simple and fast; multi-step handles hard queries but is more expensive and harder to debug
+
+### Result
+Documented that one-shot is a reasonable design choice for a chat app. Limitations are real but manageable:
+- User controls refinement through dialogue (Claude says "try searching for X instead")
+- Honest feedback when search fails (Claude admits "I don't have strong matches")
+- Fast response time (no iterative API calls)
+- Clear error modes (semantic search limitations are visible)
+
+Multi-step would be valuable in an MCP server (where Claude can declaratively request searches) but is probably overkill for a terminal chat app.
+
+---
+
+## Phase 16 — Tool-Use Search & DB Metadata Storage
+
+### Situation
+After Phase 14's analysis of one-shot vs. multi-step chat, the conversation revealed that tool-use was actually the right approach. The one-shot architecture had real limitations: Claude couldn't refine searches, couldn't filter by project/kind, and couldn't iterate when initial results were weak. Additionally, the metadata retrieval was inefficient: `_get_entry_metadata` was JSON-parsing plain text and falling back to JSONL file scans on every query.
+
+### Task
+Two improvements to unlock Claude's full potential:
+1. **Store metadata in the database** — migrate title, summary, path, tags from JSONL into the `entries` table so queries don't require file I/O
+2. **Give Claude a search tool** — expose `search_projects(query, project?, kind?, limit?)` so Claude can declaratively request searches with optional filters, enabling multi-step conversations
+
+### Action
+Three-part implementation:
+
+1. **Vector Store Schema Migration** (`vectorstore.py`)
+   - Added 4 nullable columns: `title TEXT, summary TEXT, path TEXT, tags TEXT`
+   - Automatic schema migration via `ALTER TABLE ADD COLUMN` on DB open
+   - New `get_entry_metadata()` method to fetch metadata directly from DB
+   - New `search_with_metadata()` method for efficient metadata joins
+
+2. **Embed-Time Metadata Storage** (`embed.py`)
+   - Extended `CorpusEntry` dataclass with `title, summary, path, tags` fields
+   - Updated `_iter_corpus_entries()` to populate fields from JSONL entries per kind
+   - Updated `store.upsert()` calls to write metadata to new columns
+   - Result: fresh embeddings now have full metadata stored in DB
+
+3. **Tool-Use Chat Loop** (`chat.py`)
+   - Rewrote `VectorSearcher` to take only `(db_path, project_slugs)`; metadata comes from DB, not JSONL
+   - Built static system prompt once at startup with project summaries from manifest entries
+   - Defined `SEARCH_TOOL` with parameters: `query` (required), `project` (optional), `kind` (optional), `limit` (optional)
+   - Rewrote `chat_loop()` as agentic: sends messages with tool definition, handles tool_use blocks, continues until `stop_reason != "tool_use"`
+   - Claude can now call tool multiple times, refine filters, iterate on weak results
+
+### Result
+- ✅ Metadata lives in database (no JSONL I/O)
+- ✅ Claude can call `search_projects` with filters
+- ✅ Multi-turn search refinement enabled (Claude iterates within a single user query)
+- ✅ Static system prompt with project summaries (built once, cache-friendly)
+- ✅ All existing CLI parameters unchanged; backward compatible
+- ✅ Docs updated to reflect tool-use architecture
+
+**Key insight from Phase 14 → 16:** The original analysis (one-shot is simpler) was correct for a stateless API, but incorrect for an agent-driven chat. Once Claude has tool-use capability, multi-step becomes the natural default — Claude just calls the tool when it needs to search, and the conversation logic is simpler (not trying to pre-fetch all possible results).
+
+---
+
+## Phase 15 — Summary and learnings
+
+### Situation
+After 15 phases spanning spec design (Phases 0–8), implementation (Phases 9–13), and design review (Phase 14), the COSAI Discovery indexer and chat app are working end-to-end.
+
+### Key learnings
+
+**On spec-driven design:**
+- Designing against real data (project walks) beats designing in the abstract
+- Open questions baked into specs are healthier than pretending v0 is final
+- The two "load-bearing" principles that emerged (embed/filter/store invariant, granularity rule) came only after seeing projects, not from first principles
+- Evidence threshold (≥2 projects) for promoting candidate fields prevents over-fitting
+
+**On implementation:**
+- The spec held up well against real execution — no major revisions needed once implementation started
+- Hash-diff caching (content_hash) is critical for incremental processing — second build is nearly free
+- Lazy-loading metadata (fetch only top-5, not 1000) is essential for vector search scalability
+- Conversation history is enough for multi-turn chat without Claude iterating on search
+
+**On vector search:**
+- Semantic search handles synonyms and paraphrasing that keyword search cannot
+- But vector search is approximate: if a query's embedding is far from all indexed vectors, top-5 results may not be relevant
+- Claude as quality gate is effective: Claude admits "I don't have strong matches" rather than fabricating relevance
+- Vector search requires pre-computed embeddings (Stage 3), so it's not a zero-cost upgrade from keyword search
+
+**On chat design:**
+- One-shot per query (search → format → Claude → response) is simpler than multi-step (Claude iterates on search)
+- User controls refinement through dialogue, not through Claude's search suggestions
+- Terminal chat is good for prototype/exploration; the MCP server (future) will enable Claude-to-Claude discovery
+
+**On process:**
+- Living docs (process.md, project-walkthrough-log.md, candidate-changes.md) are more valuable than post-hoc writeups
+- STAR format for process recording makes it easy to skim for "what happened" and "what was decided"
+- Decisions recorded as Tentative, revisited when later evidence arrives, avoids lock-in
+
+### What's next
+
+The working prototype validates:
+- ✅ Index format (v0.0.4) holds up against real projects
+- ✅ Vector embeddings improve relevance over keyword search
+- ✅ Terminal chat is a usable interface for exploration
+- ✅ Incremental indexing scales to 10+ projects
+
+The logical next step is the MCP server: expose the search and indexing as tools over an HTTP/Protocol interface, enabling Claude instances to discover and query the workspace programmatically (Goal #2 from Phase 0).
+
+The architecture is ready. The question is: how much MCP server design and building, vs. how much deeper refinement of the current prototype?
+
+---
+
+## Working principles (updated through Phase 15)
+
+1. **Design against real data, not in the abstract.** Specs that meet real projects break in instructive ways. Spec-first then validate beats spec-and-build.
+
+2. **Back-check every API against the user goals.** A forward design pass misses gaps that tracing real call sequences catches.
+
+3. **Bake "open questions" into specs deliberately.** Don't pretend a v0 is final. A dedicated open-questions section per doc is cheaper than rewriting later.
+
+4. **Track work in living docs, not in-conversation memory.** `project-walkthrough-log.md`, `process.md`, and the versioned format/surface docs survive context boundaries.
+
+5. **Accumulate findings, then revise.** Don't bump schema versions after every finding — let patterns emerge across multiple projects.
+
+6. **Decisions are conversational, not prescriptive.** Claude proposes — surfacing the real shape of the question, named options with trade-offs, and a recommendation with reasoning. The user decides. Decisions are recorded as `Tentative` and revisited when later evidence warrants.
+
+7. **Triage before resolving.** Not every open question deserves the same treatment. Sort into "must resolve now" (blocks concrete next steps), "should resolve now" (cheap now, expensive to retrofit), and "can defer" (low-cost defaults, or won't recur soon).
+
+8. **One question at a time.** When working through a list of decisions, pull the next one, do it justice (real shape + options + recommendation), record the outcome, then re-summarize what's left.
+
+9. **Schema discipline: candidate fields stay deferred unless a real query demands them.** Project-shape alone is not evidence; user-query is.
+
+10. **Project evaluation is anchored in realistic user prompts.** Each project walk runs a fixed list of representative prompts against what the index would return. This grounds analysis in retrieval reality rather than schema aesthetics.
+
+11. **Reversible local actions are free; commits/pushes/deletes are not.** Most work happens locally in iterative cycles. Only when shipping (specs, major code, or decisions) do the permanent artifacts matter.
+
+12. **Vector search is approximate; Claude is the quality gate.** Vector embeddings find semantic neighbors, but "nearest" is relative. Claude evaluates whether results actually answer the user's question. Honest feedback ("I don't have strong matches") is better than forcing relevance.
+
+13. **Tool-use enables natural multi-step in chat.** When Claude has declarative tool access (not just pre-computed context), multi-step search becomes simpler and more natural than one-shot. Claude calls the tool when needed; the app handles the agentic loop. This scales better than trying to pre-fetch all possible results.

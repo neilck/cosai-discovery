@@ -13,6 +13,7 @@ and in this codebase the indexer IS the importer for now).
 
 from __future__ import annotations
 
+import json
 import sqlite3
 import struct
 from dataclasses import dataclass
@@ -93,6 +94,10 @@ class VectorStore:
               model         TEXT NOT NULL,
               embedded_text TEXT NOT NULL,
               embedded_at   TEXT NOT NULL,
+              title         TEXT,
+              summary       TEXT,
+              path          TEXT,
+              tags          TEXT,
               PRIMARY KEY (project, kind, entry_id)
             );
             CREATE INDEX IF NOT EXISTS entries_project_idx ON entries(project);
@@ -119,6 +124,13 @@ class VectorStore:
             "INSERT OR IGNORE INTO schema_version(version) VALUES (?)",
             (DB_SCHEMA_VERSION,),
         )
+
+        # Migrate existing DBs: add new metadata columns if they don't exist
+        for col_name in ["title", "summary", "path", "tags"]:
+            try:
+                cur.execute(f"ALTER TABLE entries ADD COLUMN {col_name} TEXT")
+            except sqlite3.OperationalError:
+                pass  # Column already exists
         self._conn.commit()
 
         # Sanity check: refuse to operate on a DB built by a newer schema.
@@ -181,6 +193,10 @@ class VectorStore:
         model: str,
         embedded_text: str,
         vector: list[float],
+        title: str = "",
+        summary: str = "",
+        path: str = "",
+        tags: list[str] | None = None,
     ) -> None:
         """Insert or replace one entry + its vector.
 
@@ -189,6 +205,10 @@ class VectorStore:
         embedding call. To force a replacement, use replace=True via delete_entry
         first.
         """
+        if tags is None:
+            tags = []
+        tags_json = json.dumps(tags) if tags else None
+
         if len(vector) != VECTOR_DIM:
             raise ValueError(
                 f"Expected {VECTOR_DIM}-dim vector, got {len(vector)} for "
@@ -219,8 +239,8 @@ class VectorStore:
             )
             cur.execute(
                 "INSERT INTO entries"
-                "(project, kind, entry_id, content_hash, model, embedded_text, embedded_at) "
-                "VALUES (?, ?, ?, ?, ?, ?, ?)",
+                "(project, kind, entry_id, content_hash, model, embedded_text, embedded_at, title, summary, path, tags) "
+                "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
                 (
                     key.project,
                     key.kind,
@@ -229,6 +249,10 @@ class VectorStore:
                     model,
                     embedded_text,
                     embedded_at,
+                    title,
+                    summary,
+                    path,
+                    tags_json,
                 ),
             )
             self._conn.commit()
@@ -252,13 +276,17 @@ class VectorStore:
         rowid = bridge[0]
         cur.execute("UPDATE vec_entries SET embedding = ? WHERE rowid = ?", (vec_blob, rowid))
         cur.execute(
-            "UPDATE entries SET content_hash = ?, model = ?, embedded_text = ?, embedded_at = ? "
+            "UPDATE entries SET content_hash = ?, model = ?, embedded_text = ?, embedded_at = ?, title = ?, summary = ?, path = ?, tags = ? "
             "WHERE project = ? AND kind = ? AND entry_id = ?",
             (
                 content_hash,
                 model,
                 embedded_text,
                 embedded_at,
+                title,
+                summary,
+                path,
+                tags_json,
                 key.project,
                 key.kind,
                 key.entry_id,
@@ -307,6 +335,23 @@ class VectorStore:
 
     # ----------------------------------------------------------- search
 
+    def get_entry_metadata(self, project: str, kind: str, entry_id: str) -> dict | None:
+        """Fetch metadata for one entry. Returns dict or None if not found."""
+        cur = self._conn.execute(
+            "SELECT title, summary, path, tags FROM entries WHERE project = ? AND kind = ? AND entry_id = ?",
+            (project, kind, entry_id),
+        )
+        row = cur.fetchone()
+        if row is None:
+            return None
+        title, summary, path, tags_json = row
+        return {
+            "title": title or "",
+            "summary": summary or "",
+            "path": path or "",
+            "tags": json.loads(tags_json) if tags_json else [],
+        }
+
     def search(
         self,
         query_vector: list[float],
@@ -349,6 +394,31 @@ class VectorStore:
             results.append(SearchHit(proj, knd, eid, float(dist)))
             if len(results) >= k:
                 break
+        return results
+
+    def search_with_metadata(
+        self,
+        query_vector: list[float],
+        k: int = 5,
+        project: str | None = None,
+        kind: str | None = None,
+    ) -> list[dict]:
+        """KNN search with metadata joined in one query.
+
+        Returns list of dicts with all entry fields + distance (relevance score).
+        """
+        hits = self.search(query_vector, k=k, project=project, kind=kind)
+        results = []
+        for hit in hits:
+            meta = self.get_entry_metadata(hit.project, hit.kind, hit.entry_id)
+            if meta:
+                results.append({
+                    "project": hit.project,
+                    "kind": hit.kind,
+                    "entry_id": hit.entry_id,
+                    "distance": hit.distance,
+                    **meta,
+                })
         return results
 
 
